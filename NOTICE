@@ -10,8 +10,10 @@ and keep the licence of the code they change:
       change kexts/XeGfxAccel (a fork of NullMoth Systems' nvidia-macos-driver), which is under the PolyForm
       Noncommercial License 1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/). These patches are
       shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.
+      Full text: licenses/PolyForm-Noncommercial-1.0.0.md (upstream has no "Required Notice:" lines).
   metal-stack/xeintelfb/bootvram.patch
       changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
+      Full text: licenses/WTLIntelGfx-LICENSE-BSD-2-Clause.txt.
 
 Not included: Apple software, upstream binaries (XeGfx.kext, built kexts, Mesa, the Metal plugin), Intel GuC
 firmware, AirportItlwm and other third-party kexts. The build scripts fetch upstream sources at pinned revisions.
