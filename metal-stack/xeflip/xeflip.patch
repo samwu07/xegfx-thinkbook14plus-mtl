@@ -1,0 +1,60 @@
+--- a/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-02 21:17:27.786609900 +0800
++++ b/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-02 21:17:27.859986800 +0800
+@@ -89,6 +89,7 @@
+ #ifdef NMX_XEGFX
+ extern SInt64 gCntPipeInit;
+ static void nvXeTraceStart(void);
++static void nvXeFlipShutdown(void);   // <xeflip>
+ #endif
+ static int gNvAccelArmed = 0;
+ // 1 once the headless check restored the plugin name without arming (no NVIDIA display head). The Metal plugin reads it:
+@@ -995,6 +996,9 @@
+     virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE {
+         ALOG("stop");
+         stopTemperature();
++#ifdef NMX_XEGFX
++        nvXeFlipShutdown();   // <xeflip> boot framebuffer back on the panel, surfaces let go
++#endif
+         IOGraphicsAccelerator2::stop(provider);
+     }
+     virtual IOReturn callPlatformFunction(const OSSymbol *fn, bool wait, void *p1, void *p2, void *p3, void *p4) APPLE_KEXT_OVERRIDE;
+@@ -1526,8 +1530,12 @@
+     gIopVblWaitUs = (int)nvXeUs(t0);
+     return true;
+ }
++#include "xeflip_glue.inc"   // <xeflip> zero-copy scan-out on the Intel panel
+ // </wtl>
+ #endif
++#ifndef XEFLIP_TRY
++#define XEFLIP_TRY(a, fb, head, s) false
++#endif
+ IOReturn NVDisplayPipe::performTransaction(IOAccelDisplayPipeTransaction2 *txn)
+ {
+     NVPIPE_CNT(gCntPipePerform);
+@@ -1565,7 +1573,7 @@
+         if ((unsigned long long)pitch < 4ull * w) NVIOP_FAIL(kIOReturnBadArgument, "resource %ux%u: +0xb8 reads %u, which is not a row pitch (need >= %u) — not a surface buffer", w, h, pitch, 4u * w);
+         if ((unsigned long long)h * pitch > vm->fBytes) NVIOP_FAIL(kIOReturnOverrun, "resource %ux%u pitch %u exceeds its %llu bytes", w, h, pitch, (unsigned long long)vm->fBytes);
+         src = (const volatile unsigned int *)vm->fKva; fromRes = true;
+-    } else if (s && nvAccelIopFlip(fb, head, s, this)) {
++    } else if (s && (XEFLIP_TRY(a, fb, head, s) || nvAccelIopFlip(fb, head, s, this))) {
+         OSAddAtomic64(1, &gCntIopSrcSurf); OSAddAtomic64(1, &gCntIopOk); OSAddAtomic64(1, &gCntIopOkHead[head]);
+         return kIOReturnSuccess;
+     } else if (s) {
+@@ -1622,6 +1630,9 @@
+         volatile unsigned int *dp = d + (unsigned long)y * dpr;
+         for (unsigned x = 0; x < words; x++) dp[x] = sp[x];
+     }
++#ifdef NMX_XEGFX
++    if (head == 4) nvXeFlipHome();   // <xeflip> the frame just copied is in the boot framebuffer: show that again
++#endif
+     OSAddAtomic64(1, fromRes ? &gCntIopSrcRes : &gCntIopSrcSurf);
+     const SInt64 n = OSAddAtomic64(1, &gCntIopOk);
+     const SInt64 nh = OSAddAtomic64(1, &gCntIopOkHead[head]);
+@@ -1862,6 +1873,7 @@
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_blank);      sysctl_register_oid(&sysctl__debug_nvaccel_iop_copy_skip);
+ #ifdef NMX_XEGFX
+     nvXeVblSysctls();
++    nvXeFlipSysctls();   // <xeflip>
+ #endif
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_flip);       sysctl_register_oid(&sysctl__debug_nvaccel_iop_flips);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_flip_home);  sysctl_register_oid(&sysctl__debug_nvaccel_iop_flip_lock);

@@ -1,0 +1,55 @@
+--- a/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-02 23:18:48
++++ b/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-02 23:19:17
+@@ -57,6 +57,17 @@
+     if (!p || !p->getMetaClass() || strcmp(p->getMetaClass()->getClassName(), "UEFIGraphicsFB") != 0) return false;
+     for (int hops = 0; p && hops < 8; hops++, p = p->getProvider()) if (p->metaCast("IOPCIDevice")) return false;
+     return true;
++}
++// <gpufb> the framebuffer the panel is attached to: IOFramebuffer gives it an IODisplayConnect (display0) when it
++// comes online. With XeGfxIntelFB 0.9.1 that is GFX0's own framebuffer, and the firmware one is left without a
++// display (2026-11-02 23:02: head 4 stayed on the dead firmware framebuffer, "getPixelInformation ... failed")
++static bool nvXeHasPanel(IOService *fb)
++{
++    OSIterator *it = fb ? fb->getChildIterator(gIOServicePlane) : nullptr; if (!it) return false;
++    bool found = false; OSObject *o;
++    while (!found && (o = it->getNextObject())) { IORegistryEntry *e = OSDynamicCast(IORegistryEntry, o); found = e && e->metaCast("IODisplayConnect"); }
++    it->release();
++    return found;
+ }
+ #endif
+ #define ALOGV(fmt, ...) do { if (nvaccel_verbose()) ALOG(fmt, ##__VA_ARGS__); } while (0)
+@@ -373,7 +384,10 @@
+         if (bootDisplay) {
+             if (me->fRegLock) IOLockLock(me->fRegLock);
+             IOService *held = me->fFBs[4];
+-            if (held && held != newService && !(me->fFBRegistered & (1u << 4))
++            if (held && held != newService && nvXeHasPanel(held) && !nvXeHasPanel(newService))
++                ALOG("%s is the firmware framebuffer, but head 4 is %s, which has the panel -- left as it is",
++                     newService->getName(), held->getName());
++            else if (held && held != newService && !(me->fFBRegistered & (1u << 4))
+                 && OSCompareAndSwapPtr(held, nullptr, (void *volatile *)&me->fFBs[4])) {
+                 OSBitAndAtomic(~(1u << 4), &gNvHeadsPublished);
+                 if (OSCompareAndSwapPtr(held, nullptr, (void *volatile *)&me->fFB)) held->release();
+@@ -385,7 +399,21 @@
+                      newService->getName(), held->getName(), (me->fFBRegistered & (1u << 4)) ? "already registered" : "changed under us");
+             if (me->fRegLock) IOLockUnlock(me->fRegLock);
+         } else if (IOService *held = me->fFBs[4]) {
+-            if (nvXeIsFirmwareDisplay(held)) {
++            bool took = false;
++            if (nvXeIsFirmwareDisplay(held) && nvXeHasPanel(newService) && !nvXeHasPanel(held)) {
++                if (me->fRegLock) IOLockLock(me->fRegLock);
++                if (!(me->fFBRegistered & (1u << 4)) && OSCompareAndSwapPtr(held, nullptr, (void *volatile *)&me->fFBs[4])) {
++                    OSBitAndAtomic(~(1u << 4), &gNvHeadsPublished);
++                    if (OSCompareAndSwapPtr(held, nullptr, (void *volatile *)&me->fFB)) held->release();
++                    ALOG("%s is on the GPU and has the panel: it takes head 4 from the firmware framebuffer %s, which has none",
++                         newService->getName(), held->getName());
++                    held->release(); took = true;
++                } else
++                    ALOG("%s is on the GPU and has the panel, but head 4 (%s) is already registered -- restart, then run the stages again",
++                         newService->getName(), held->getName());
++                if (me->fRegLock) IOLockUnlock(me->fRegLock);
++            }
++            if (!took && nvXeIsFirmwareDisplay(held)) {
+                 ALOG("%s is on the GPU, but head 4 is already the firmware framebuffer the panel is on (%s) -- not taken",
+                      newService->getName(), held->getName());
+                 return true;

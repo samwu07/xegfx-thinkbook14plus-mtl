@@ -1,0 +1,12 @@
+reports/
+logs/
+out/
+out-prev-*/
+*.kext/
+*.kc
+*.panic
+*.ips
+__pycache__/
+fbreloc/out/
+._*
+.DS_Store

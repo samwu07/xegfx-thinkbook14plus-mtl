@@ -1,0 +1,18 @@
+Licences in this repository
+
+Everything written for this repository (scripts, xgfbmove/, fbreloc/, xeflip_core.h, xeflip_glue.inc, opencore/,
+ggtt-*.py, documentation) is under the BSD 2-Clause licence in LICENSE.
+
+Patches modify upstream WTLIntelGfx (https://github.com/watchthelight-labs/WTLIntelGfx, commit a3fd73ed, tag v0.0.47)
+and keep the licence of the code they change:
+
+  metal-stack/xeflip/xeflip.patch, metal-stack/xeflip/gpufb.patch
+      change kexts/XeGfxAccel (a fork of NullMoth Systems' nvidia-macos-driver), which is under the PolyForm
+      Noncommercial License 1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/). These patches are
+      shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.
+  metal-stack/xeintelfb/bootvram.patch
+      changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
+
+Not included: Apple software, upstream binaries (XeGfx.kext, built kexts, Mesa, the Metal plugin), Intel GuC
+firmware, AirportItlwm and other third-party kexts. The build scripts fetch upstream sources at pinned revisions.
+The OpenCore patch in opencore/build_clean07.py contains only the bytes it finds and replaces in AirportItlwm 2.4.0.
