@@ -10,3 +10,11 @@ __pycache__/
 fbreloc/out/
 ._*
 .DS_Store
+metal-stack/desktop/fps-gaps
+release/stage-*/
+release/*.zip
+release/SHA256-*.txt
+release/gh-repo/
+bt/kexts*/
+bt/downloads/
+bt/backup-*/

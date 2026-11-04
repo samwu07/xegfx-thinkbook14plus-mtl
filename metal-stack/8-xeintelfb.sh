@@ -1,12 +1,13 @@
 #!/bin/bash
-# 8-xeintelfb.sh -- XeGfxIntelFB 0.9.3: the v0.0.47 source plus metal-stack/xeintelfb/bootvram.patch, built with
+# 8-xeintelfb.sh -- XeGfxIntelFB 0.9.4: the v0.0.47 source plus metal-stack/xeintelfb/bootvram.patch, built with
 # upstream's build_xegfxintelfb.sh, into /Volumes/PKG/metal-stack/out/kexts/XeGfxIntelFB.kext (0.9 kept in out/orig).
 # Why: 0.9 renames GFX0's IONDRVFramebuffer, but that one never comes online on this Mac -- the GOP framebuffer
 # (phys 0x7a800000, stolen memory) is in neither GFX0 BAR, so WindowServer's Intel FB fails to open and it keeps using
-# UEFIGraphicsFB's .Display_boot (no GPU above it: no IOPresentment, 0 swaps). 0.9.3 adds the console range to GFX0's
+# UEFIGraphicsFB's .Display_boot (no GPU above it: no IOPresentment, 0 swaps). 0.9.4 adds the console range to GFX0's
 # device memory before IONDRVFramebuffer starts, and gives that framebuffer IOFBDependentID/Index (XeGfxAGDC needs
 # them), and the panel timing from its EDID as NVRMTiming (AGDC answers the link query with it). Boot-arg
-# -xeintelfbnovram turns all three off.
+# -xeintelfbnovram turns all three off. 0.9.4 also gives IOFramebuffer a VBL interrupt from pipe A's frame counter (the boot
+# NDRV has none: IOFramebuffer ran its 30 Hz stand-in and WindowServer composited at 30 frames/s); -xeintelfbnovbl.
 # Seconds; in a boot where the stages have not run (4-kexts.sh's rule).
 #   bash /Volumes/PKG/metal-stack/8-xeintelfb.sh
 #   sudo bash /Volumes/PKG/metal-stack/desktop/install-xeintelfb.sh      then restart into CLEAN-07Y
@@ -31,8 +32,8 @@ build() {
   local k="$B/XeGfxIntelFB/XeGfxIntelFB.kext"
   OUTROOT="$B" bash "$P/build/build_xegfxintelfb.sh"
   [ -f "$k/Contents/MacOS/XeGfxIntelFB" ]
-  plutil -replace CFBundleVersion -string 0.9.3 "$k/Contents/Info.plist"
-  plutil -replace CFBundleShortVersionString -string 0.9.3 "$k/Contents/Info.plist"
+  plutil -replace CFBundleVersion -string 0.9.4 "$k/Contents/Info.plist"
+  plutil -replace CFBundleShortVersionString -string 0.9.4 "$k/Contents/Info.plist"
   # no grep -q after a pipe: pipefail and SIGPIPE turn an early match into a failure
   strings "$k/Contents/MacOS/XeGfxIntelFB" | grep 'boot vram: console' > /dev/null || { echo "the binary has no bootvram code"; return 1; }
   codesign -s - -f "$k"
@@ -49,5 +50,5 @@ step xeintelfb-build build
 step xeintelfb-collect collect
 cat "$LOGS/xeintelfb-prepare.log" "$LOGS/xeintelfb-build.log" | grep -E 'hooks|XeGfxIntelFB ' | head -6
 echo
-echo "XeGfxIntelFB 0.9.3 (bootvram) is in out/kexts (0.9 kept in out/orig). Next:"
+echo "XeGfxIntelFB 0.9.4 (bootvram) is in out/kexts (0.9 kept in out/orig). Next:"
 echo "  sudo bash /Volumes/PKG/metal-stack/desktop/install-xeintelfb.sh      then restart into CLEAN-07Y"

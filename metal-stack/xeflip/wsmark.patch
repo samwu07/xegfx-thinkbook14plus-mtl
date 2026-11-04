@@ -1,0 +1,135 @@
+--- a/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-03 15:06:19
++++ b/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-03 15:06:19
+@@ -244,6 +244,7 @@
+ OSDefineMetaClassAndStructors(IOAccelNVRMCarrier, IOService)
+ 
+ #ifdef NMX_XEGFX
++static IOReturn nvXeWsMark(IOExternalMethodArguments *a);   // <wsmark> selector 1 below
+ // WindowServer's sandbox lets it open /dev/dri read-only but never ioctl(2) a device node; it may open IOAccel*
+ // user clients. libdrm sends its ioctls here with the minor of its read-only fd, XeGfx checks the caller opened it.
+ class IOAccelXeGfxDRMClient : public IOUserClient {
+@@ -253,6 +254,7 @@
+     IOReturn externalMethod(uint32_t sel, IOExternalMethodArguments *a, IOExternalMethodDispatch *,
+                             OSObject *, void *) APPLE_KEXT_OVERRIDE {
+         static IOService *res;
++        if (sel == 1) return nvXeWsMark(a);   // <wsmark>
+         if (sel != 0 || a->scalarInputCount != 3 || a->scalarOutputCount != 1) return kIOReturnBadArgument;
+         if (!res) { OSDictionary *m = serviceMatching("XeGfxResident"); if (m) res = waitForMatchingService(m, 1000ULL * 1000 * 1000); }
+         if (!res) return kIOReturnNotAttached;
+@@ -1835,6 +1837,28 @@
+ static int gSurfGpuOn = 1;
+ static SInt64 gCntSurfMarks, gCntSurfWaits, gCntSurfTimeouts;
+ static int gSurfWaitMaxUs;
++// <wsmark> 0.9.5 diagnostics. 2026-11-03 14:55: with the plugin's 'XGDR' marks, 305 swaps timed out waiting for a ready
++// mark and the Dock vanished. A late completion shows as a ready mark for a surface whose timeout already cleared it
++// (ready_late close to timeouts); a hold the plugin never releases shows as timeouts piling up on one surface with no
++// late ready marks. debug.nvaccel_surface_gpu_timeout_ids: the surfaces timed out on, with counts.
++static SInt64 gCntSurfPend, gCntSurfReady, gCntSurfReadyLate;
++struct NVSurfTo { unsigned int id, n; };
++static NVSurfTo gSurfTo[8];
++static char gSurfToStr[200] = "none";
++static unsigned gSurfToLogged, gSurfLateLogged;
++static void nvSurfToNote(unsigned int id)   // surface lock held
++{
++    unsigned i = 0, low = 0;
++    while (i < 8 && gSurfTo[i].id != id) i++;
++    if (i == 8) {
++        for (unsigned j = 1; j < 8; j++) if (gSurfTo[j].n < gSurfTo[low].n) low = j;
++        i = low; gSurfTo[i].id = id; gSurfTo[i].n = 0;
++    }
++    gSurfTo[i].n++;
++    int w = 0;
++    for (unsigned j = 0; j < 8 && w >= 0 && (unsigned)w < sizeof gSurfToStr; j++)
++        if (gSurfTo[j].id) w += snprintf(gSurfToStr + w, sizeof gSurfToStr - (size_t)w, "%s%#x x%u", w ? ", " : "", gSurfTo[j].id, gSurfTo[j].n);
++}
+ static const unsigned kSurfGpuWaitMs = 100;   // a GPU that has not finished a composite in 100 ms is hung; flip anyway
+ struct NVSurfPending { unsigned int id; unsigned int seq; };
+ static NVSurfPending gSurfPend[32];
+@@ -1856,15 +1880,18 @@
+         if (slot == 32 && !gSurfPend[i].id) slot = i;
+         if (gSurfPend[i].seq < gSurfPend[oldest].seq) oldest = i;
+     }
++    bool late = false;
+     if (pending) {
+         if (slot == 32) slot = oldest;   // 32 surfaces in flight at once is not a compositor; the oldest mark goes
+         gSurfPend[slot].id = id; gSurfPend[slot].seq = ++gSurfPendSeq;
+     } else if (slot < 32 && gSurfPend[slot].id == id) {
+         gSurfPend[slot].id = 0;
+         IOLockWakeup(l, gSurfPend, false);
+-    }
++    } else late = true;   // <wsmark> ready for a surface not pending: its timeout cleared it first (or a second ready)
+     IOLockUnlock(l);
+     OSAddAtomic64(1, &gCntSurfMarks);
++    OSAddAtomic64(1, pending ? &gCntSurfPend : late ? &gCntSurfReadyLate : &gCntSurfReady);
++    if (late && gSurfLateLogged < 16) { gSurfLateLogged++; ALOG("surface marks: ready for surface %#x, which was not pending (after its timeout?) [%u/16]", id, gSurfLateLogged); }
+ }
+ static bool nvSurfWaitReady(unsigned int id)
+ {
+@@ -1878,7 +1905,7 @@
+         unsigned i = 0;
+         while (i < 32 && gSurfPend[i].id != id) i++;
+         if (i == 32) break;
+-        if (mach_absolute_time() >= deadline) { gSurfPend[i].id = 0; ready = false; break; }
++        if (mach_absolute_time() >= deadline) { gSurfPend[i].id = 0; ready = false; nvSurfToNote(id); break; }
+         waited = true;
+         IOLockSleepDeadline(l, gSurfPend, deadline, THREAD_UNINT);
+     }
+@@ -1888,6 +1915,11 @@
+         if ((int)(ns / 1000) > gSurfWaitMaxUs) gSurfWaitMaxUs = (int)(ns / 1000);
+         OSAddAtomic64(1, ready ? &gCntSurfWaits : &gCntSurfTimeouts);
+     }
++    if (!ready && gSurfToLogged < 32) {
++        gSurfToLogged++;
++        ALOG("surface marks: no ready mark for surface %#x in %u ms, swapped anyway (pending %lld, ready %lld, late %lld) [%u/32]",
++             id, kSurfGpuWaitMs, (long long)gCntSurfPend, (long long)gCntSurfReady, (long long)gCntSurfReadyLate, gSurfToLogged);
++    }
+     return ready;
+ }
+ SYSCTL_INT(_debug, OID_AUTO, nvaccel_surface_gpu, CTLFLAG_RD | CTLFLAG_LOCKED, &gSurfGpuOn, 0, "1 = WindowServer swaps wait for GPU completion here (same value as nvaccel_surface_gpu_on)");
+@@ -1896,6 +1928,11 @@
+ NVACCEL_CNT(nvaccel_surface_gpu_waits,    gCntSurfWaits,    "swaps that waited here for their composite to finish");
+ NVACCEL_CNT(nvaccel_surface_gpu_timeouts, gCntSurfTimeouts, "swaps whose composite did not finish within 100 ms");
+ SYSCTL_INT(_debug, OID_AUTO, nvaccel_surface_gpu_wait_max_us, CTLFLAG_RD | CTLFLAG_LOCKED, &gSurfWaitMaxUs, 0, "longest swap wait for a composite, us");
++NVACCEL_CNT(nvaccel_surface_gpu_pend,       gCntSurfPend,      "pending marks (a WindowServer composite committed)");
++NVACCEL_CNT(nvaccel_surface_gpu_ready,      gCntSurfReady,     "ready marks that cleared a pending surface");
++NVACCEL_CNT(nvaccel_surface_gpu_ready_late, gCntSurfReadyLate, "ready marks for a surface no longer pending (after its timeout)");
++SYSCTL_STRING(_debug, OID_AUTO, nvaccel_surface_gpu_timeout_ids, CTLFLAG_RD | CTLFLAG_LOCKED, gSurfToStr, sizeof gSurfToStr,
++              "surfaces whose swap timed out waiting for a ready mark, with counts (8 most frequent)");
+ static SInt64 gCntIopAsync, gCntIopAsyncRefused, gCntIopAsyncDrop;
+ SYSCTL_INT(_debug, OID_AUTO, nvaccel_iop_async, CTLFLAG_RW | CTLFLAG_LOCKED, &gIopAsync, 0, "1 = the swap runs on a thread call and completes through signalTransactionInterrupt (Apple's shape); 0 = the earlier synchronous flip");
+ NVACCEL_CNT(nvaccel_iop_async_flips,   gCntIopAsync,        "swaps completed asynchronously");
+@@ -1955,6 +1992,8 @@
+     sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu);    sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_on);
+     sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_marks); sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_waits);
+     sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_timeouts); sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_wait_max_us);
++    sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_pend);     sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_ready);   // <wsmark>
++    sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_ready_late); sysctl_register_oid(&sysctl__debug_nvaccel_surface_gpu_timeout_ids);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_async_refused); sysctl_register_oid(&sysctl__debug_nvaccel_iop_async_drop);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_late);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_ok_h0);      sysctl_register_oid(&sysctl__debug_nvaccel_iop_ok_h1);
+@@ -2174,7 +2213,25 @@
+     if (strcmp(nm, "WindowServer")) return NVRM_SS_OFF;
+     if (p->surfaceID) nvSurfMark(p->surfaceID, (p->plane & 1u) != 0);
+     return 0;
++}
++#ifdef NMX_XEGFX
++// <wsmark> WindowServer's completion marks on the Intel GPU. NVK sends them through NVRM's surface escape; ANV exports
++// no nvmtl_nvk_surface_dirty, so the plugin kept WindowServer waiting for every composite to finish (2026-11-03 14:22:
++// 41 % of its main thread in waitUntilCompleted, the desktop at ~30 frames/s). The plugin now sends them on its 'XGDR'
++// connection, which WindowServer's sandbox already allows (ANV's DRM ioctls use it): selector 1, scalars (surface ID,
++// 1 pending / 0 ready) -> status, 0 = taken. Surface 0 is the plugin's probe. Same checks as the escape: WindowServer
++// only, nothing while debug.nvaccel_surface_gpu_on is 0.
++static IOReturn nvXeWsMark(IOExternalMethodArguments *a)
++{
++    if (a->scalarInputCount != 2 || a->scalarOutputCount != 1) return kIOReturnBadArgument;
++    struct NVRMSurfShareEsc e; bzero(&e, sizeof e);
++    e.version = NVRM_SURFSHARE_VERSION;
++    e.surfaceID = (unsigned int)a->scalarInput[0];
++    e.plane = NVRM_SS_PLANE_GPU_MARK | (a->scalarInput[1] ? 1u : 0u);
++    a->scalarOutput[0] = nvSurfGpuEscape(&e);
++    return kIOReturnSuccess;
+ }
++#endif
+ static IOReturn nvAccelSurfVram(struct NVRMSurfShareEsc *p, task_t task, unsigned cmd)
+ {
+     if (p->version == NVRM_SURFSHARE_VERSION && cmd == NVRM_ESC_SURF_DIRTY && (p->plane & NVRM_SS_PLANE_GPU_MARK)) {

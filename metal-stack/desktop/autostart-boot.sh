@@ -36,6 +36,10 @@ for i in $(seq 1 90); do [ -f "$PKG/desktop-on.sh" ] && break; sleep 2; done
 [ -f "$PKG/desktop-on.sh" ] || { log "$PKG not mounted after 3 minutes: nothing done"; exit 0; }
 # WindowServer must be up (desktop-on.sh restarts it) and nobody logged in yet
 for i in $(seq 1 60); do pgrep -x WindowServer > /dev/null && break; sleep 2; done
+# XeGfxIntelFB's framebuffer gets the panel (display0) only when WindowServer first opens it: 2026-11-03 13:12 the
+# kext started at :40, display0 came at 13:13:02, desktop-on.sh checked at :45 and stopped. Wait for it (2 minutes).
+for i in $(seq 1 60); do ioreg -r -c XeGfxIntelFramebuffer -d 2 | grep -F 'display0' > /dev/null && break; sleep 2; done
+ioreg -r -c XeGfxIntelFramebuffer -d 2 | grep -F 'display0' > /dev/null || log "the panel did not reach XeGfxIntelFB's framebuffer in 2 minutes; desktop-on.sh will say why"
 cu=$(stat -f %Su /dev/console 2>/dev/null)
 # at the login window the console belongs to root or to WindowServer's own account (2026-11-03 08:19: "_windowserver was
 # logged in" skipped a CLEAN-07Y boot); only a person's account counts

@@ -98,6 +98,18 @@ grep -E "scanout|display pipe|mode change|level 3|armed|-> pipe" "$R/kernel-afte
 # 2026-11-02 23:50: with GFX0's framebuffer online (XeGfxIntelFB 0.9.2) WindowServer sent its frames as display-pipe
 # transactions, and all 45 came back 0xe00002c7: performTransaction refuses while debug.nvaccel_iop is 0, its default,
 # and nothing here had set it. WindowServer then crashed twice in a CPU blit and the watchdog panicked. IOP=0 skips it.
+# 2026-11-03 14:55: with XeGfxAccel 0.9.4 + the plugin's 'XGDR' marks, WindowServer stopped waiting for its composites
+# (the ~30 frames/s cap), but 305 swaps timed out waiting for a ready mark and the Dock vanished until it was restarted.
+# The cause was the plugin's release order (it looked NVAccelSurfaceWait up as NVAccel only; fixed 16:1x: 3 timeouts in 60
+# s). With XeGfxIntelFB 0.9.4's VBL the marks take the desktop to ~60 frames/s (16:5x: 497 of 616 frame gaps at one
+# refresh, 2 timeouts), so they are on by default since then. WSMARK=0 keeps WindowServer's own wait (~30 frames/s).
+echo "== 4a. WindowServer completion marks"
+if [ "${WSMARK:-1}" = 1 ]; then
+  sysctl -w debug.nvaccel_surface_gpu_on=1 2>/dev/null || echo "no debug.nvaccel_surface_gpu_on (XeGfxAccel before 0.9.4)"
+else
+  sysctl -w debug.nvaccel_surface_gpu_on=0 2>/dev/null || true
+  echo "WSMARK=0: off (WindowServer waits for each composite itself, ~30 frames/s)"
+fi
 echo "== 4b. frame transactions"
 if [ "${IOP:-1}" = 1 ]; then
   sysctl -w debug.nvaccel_iop=1 || die "sysctl debug.nvaccel_iop=1 failed"

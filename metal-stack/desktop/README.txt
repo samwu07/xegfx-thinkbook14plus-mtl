@@ -69,6 +69,60 @@ Known issue (2026-11-03 08:45): window sidebars (behind-window blur, "vibrancy")
   flip (it was off). System Settings > Accessibility > Display > Reduce transparency makes them solid (confirmed), so the
   blur passes (CoreAnimation's downsample_blur_* / narrow_blur_* through NVMTL) are the suspects. Workaround: keep it on.
 
+Known issues (2026-11-03 15:2x, screenshots): desktop widgets in the full-colour desktop mode (no app in front) get
+  octagonal corners -- straight 45-degree cuts where the rounded corner should be; with an app in front the same widgets
+  are rounded. In the Weather app: opaque black boxes behind sidebar text, bright cyan where a translucent material
+  should be. An off-screen CARenderer test on the Intel device (cornerRadius, continuous corners, masksToBounds, shape
+  and layer masks, 7 variants) renders correct arcs, so these are WindowServer-only shader variants mistranslated by
+  NVMTL (a straight cut = |x|+|y| where sqrt(x*x+y*y) belongs). Not fixed.
+30 frames/s, found (2026-11-03 16:3x): WindowServer composites on a 30 Hz beat. fps-vbl.sh: 27/28/28/28 frames/s with
+  flip on, copy at vblank, copy at once, + marks -- the present path is not it; fps-now.sh while dragging a window (no
+  browser): max 30; fps-gaps: 324 of 398 frame gaps 30-34 ms, 7 at 15-19 ms. The boot NDRV under XeGfxIntelFB has no VBL
+  interrupt, so IOFramebuffer runs its 30 Hz stand-in (IOFBWaitCursorPeriod 33333333). XeGfxIntelFB 0.9.4 (8-xeintelfb.sh)
+  registers a VBL source driven by pipe A's frame counter (58.5 Hz); boot-arg -xeintelfbnovbl turns it off.
+  Result 2026-11-03 16:5x, fps-gaps while dragging: 0.9.3 7 gaps at 15-19 ms / 324 at 30-34; 0.9.4 (VBL 58.17 Hz from the
+  frame counter) 154 / 175; 0.9.4 + the marks (debug.nvaccel_surface_gpu_on=1) 497 / 51 of 616, 2 timeouts, 0 fails:
+  ~58-60 frames/s. Since then the marks are ON by default in desktop-on.sh (and so in autostart); WSMARK=0 turns them off,
+  at run time: sudo sysctl -w debug.nvaccel_surface_gpu_on=0.
+Known limit (2026-11-03 14:2x): the desktop runs at ~30 frames/s (UFO test 30 fps in Safari and Edge).
+  fps-ab.sh: 29 / 28 / 29 frames/s with the flip on / off / on -- not the present path. Edge with the GPU: 22. WindowServer
+  ~72 % CPU. sample (reports/ws-sample.txt): ws_main_thread 41 % in CompositorMetal::composite -> MetalContext::Flush ->
+  -[NVMTLCommandBuffer commitAndWaitUntilSubmitted] -> waitUntilCompleted: WindowServer waits for every composite to
+  FINISH on the GPU, so CPU and GPU take turns. The plugin skips that wait only when the kernel takes WindowServer's
+  completion marks (nvmtl_ws_kernel_waits); the marks go through nvmtl_nvk_surface_dirty, which only NVIDIA's NVK
+  exports -- ANV has none, so debug.nvaccel_surface_gpu_marks stays 0 and the log says "waiting for each composite here".
+  Fix (written 2026-11-03, not yet booted): the marks go on the accelerator's 'XGDR' connection, which WindowServer
+  already uses for ANV's DRM ioctls. XeGfxAccel 0.9.4 (7-xeflip.sh + xeflip/wsmark.patch): selector 1 (surface, pending)
+  -> nvSurfGpuEscape. Plugin (9-wsmark-plugin.sh + xeflip/wsmark-plugin.patch): uses it when the Vulkan driver has no NVK
+  escape. Either half alone changes nothing (0.9.3 answers selector 1 with bad argument, checked live). Check after
+  boot: debug.nvaccel_surface_gpu_marks counting, WindowServer log "the swap waits in NVAccel". Off again without a
+  rebuild: sudo sysctl -w debug.nvaccel_surface_gpu_on=0 (the plugin re-asks every second).
+  2026-11-03 14:55, booted: the marks work (WindowServer: "the swap waits in NVAccel", 14777 marks) but 305 swaps timed
+  out at 100 ms waiting for a ready mark and the Dock vanished; marks off + killall Dock brought it back. Suspect: a
+  pending hold that is never released (the plugin counts holds per surface and marks ready only when the count reaches
+  0), or a frame shown before the GPU finished and carried forward. desktop-on.sh now keeps them OFF; WSMARK=1 tries
+  them. Next: log the surface ID on each timeout (kernel) and the hold count per surface (plugin).
+  Diagnostics written: XeGfxAccel 0.9.5 (pend / ready / ready_late counters, debug.nvaccel_surface_gpu_timeout_ids, the
+  first 32 timeouts logged with their surface) and the plugin (commit-to-release time per composite, 5 s summaries of
+  open holds). Test in a running desktop: sudo bash desktop/wsmark-test.sh (60 s with the marks on, then off again).
+  Result 2026-11-03 15:44 (reports/wsmark-20261103-154406): timeouts 116 = late ready marks 116, open holds 3 on 2
+  surfaces throughout -- no leak; the composites finish, but late: 251 of 1830 over 50 ms (86-135 ms typical, worst 562
+  ms), frames to the panel 20-28/s with the marks (29 without). So the cap is the cost of a composite itself (~34 ms when
+  WindowServer waits for each one); the marks only queue more of them. Keep them off. Next question: GPU execution time
+  vs the plugin's CPU work per composite (copies, one submit per managed upload, completion latency).
+  Frame breakdown written (plugin, 9-wsmark-plugin.sh): per WindowServer composite commit -> GPU start, GPU span (device
+  timestamps over all parts), GPU end -> completion, parts per composite; 5 s summaries "WindowServer frames (5 s)" and
+  the first 8 over 50 ms. Works with the marks off. Read: log show --last 5m --predicate 'eventMessage CONTAINS
+  "WindowServer frame"'.
+  Result 2026-11-03 16:00 (marks off, UFO test): ~84 WindowServer command buffers/s, each 3.4-3.8 ms = commit->GPU 1.5 +
+  GPU 1.7 + done 0.3; ~3 per frame at 28 frames/s. The main thread is busy 23 % (sample): ~8 ms CPU + ~11-14 ms waiting
+  for its command buffers one by one = ~22 ms per frame > 16.7 ms, so every second refresh is missed: 60 -> 30. The GPU
+  does ~5 ms per frame. With the marks the waits go, but the swap waits for a mark INSIDE the transaction while the
+  plugin releases it only after publishing, which needs the accelerator: that is the 100 ms timeout (116 = 116). The
+  plugin's early order (release first) needs NVAccelSurfaceWait, which NMXAccel publishes but the plugin looked up as
+  NVAccel only ("marked newest after the GPU finishes"). Fixed in wsmark-plugin.patch (NMXAccel too); only matters with
+  the marks on. Test again: WSMARK via wsmark-test.sh.
+
 Zero-copy flip (XeGfxAccel 0.9.1, local addition; metal-stack/xeflip): instead of copying each composited frame (22.5
 MiB) into the boot framebuffer, the panel scans WindowServer's surface itself: its pages are mapped into a GGTT slot
 once and PLANE_SURF is pointed at the slot, latched at vblank. Off by default; needs frames reaching the accelerator

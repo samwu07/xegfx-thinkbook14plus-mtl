@@ -6,15 +6,32 @@ ggtt-*.py, documentation) is under the BSD 2-Clause licence in LICENSE.
 Patches modify upstream WTLIntelGfx (https://github.com/watchthelight-labs/WTLIntelGfx, commit a3fd73ed, tag v0.0.47)
 and keep the licence of the code they change:
 
-  metal-stack/xeflip/xeflip.patch, metal-stack/xeflip/gpufb.patch
+  metal-stack/xeflip/xeflip.patch, metal-stack/xeflip/gpufb.patch, metal-stack/xeflip/wsmark.patch
       change kexts/XeGfxAccel (a fork of NullMoth Systems' nvidia-macos-driver), which is under the PolyForm
       Noncommercial License 1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/). These patches are
       shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.
       Full text: licenses/PolyForm-Noncommercial-1.0.0.md (upstream has no "Required Notice:" lines).
+  metal-stack/xeflip/wsmark-plugin.patch
+      changes plugin/ (the NVMTLDriver Metal plugin, NullMoth Systems, SPDX PolyForm-Noncommercial-1.0.0): same terms,
+      no commercial use.
   metal-stack/xeintelfb/bootvram.patch
       changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
       Full text: licenses/WTLIntelGfx-LICENSE-BSD-2-Clause.txt.
 
-Not included: Apple software, upstream binaries (XeGfx.kext, built kexts, Mesa, the Metal plugin), Intel GuC
+Not included in the repository: Apple software, upstream binaries (XeGfx.kext, built kexts, Mesa, the Metal plugin), Intel GuC
 firmware, AirportItlwm and other third-party kexts. The build scripts fetch upstream sources at pinned revisions.
 The OpenCore patch in opencore/build_clean07.py contains only the bytes it finds and replaces in AirportItlwm 2.4.0.
+
+GitHub Releases of this repository carry binaries as a backup of a working machine, outside the source tree:
+  EFI-CLEAN-07Y-redacted-*.zip  the OpenCore EFI as booted (OpenCore, OpenRuntime, OpenHfsPlus: BSD-3-Clause,
+      acidanthera; Lilu, VirtualSMC, NVMeFix, BlueToolFixup: BSD-3-Clause, acidanthera; VoodooPS2Controller: GPL-2.0,
+      acidanthera; AirportItlwm, IntelBluetoothFirmware, IntelBTPatcher: OpenIntelWireless, see their repositories;
+      AMFIPass: distributed as a binary by the OpenCore Legacy Patcher project; UEFIGraphicsFB and XeGfx: WTLIntelGfx).
+      The Mac's serial number, MLB, ROM and SystemUUID are replaced by placeholders: generate your own (GenSMBIOS).
+  xegfx-drivers-*.zip  the installed XeGfxAccel / XeGfxAGDC / XeGfxIntelFB kexts (built from WTLIntelGfx v0.0.47 with
+      the patches above; XeGfxAccel and the Metal plugin PolyForm-Noncommercial-1.0.0, the rest BSD-2-Clause),
+      XgFbMove (BSD-2-Clause, this repository), the NVMTLDriver Metal plugin with air-runtime/ (MacPorts LLVM 20 and
+      the libraries it needs: Apache-2.0 WITH LLVM-exception, ICU, libxml2, zlib, zstd, libffi, libedit, ncurses,
+      libiconv licences), and nvmtl/ (Mesa ANV libvulkan_intel and libnvmtl_translate: MIT; libdrm: MIT).
+      Apple's air-opt is left out (the desktop uses the in-process libLLVM reader).
+Binaries are provided as is, for non-commercial use, with no warranty.
