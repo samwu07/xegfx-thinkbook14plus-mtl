@@ -36,6 +36,12 @@ IntelBluetoothFirmware + IntelBTPatcher **2.5.0**（OpenIntelWireless master 分
 （`bt/add-bluetooth.sh apply`）；NVRAM 键 `bluetoothExternalDongleFailed` 和 `bluetoothInternalControllerInfo`
 （`bt/bt-nvram.sh set`）；然后重启。非 Apple 的蓝牙控制器不支持隔空投送（AirDrop）、接力（Handoff）和连续互通（Continuity）。
 
+## 触摸板
+
+触摸板是 I2C 总线上的 Goodix GXTP5100，不是 PS/2。使用补上 Meteor Lake PCI ID（`8086:7E78`）的 VoodooI2C 2.9.1，
+并加上启动参数 `-vi2c-force-polling` 即可工作（VoodooGPIO 没有这块板子的 GPIO 控制器 `INTC1083` 的表）。
+详情和脚本见 `touchpad/README.txt`。
+
 ## 二进制文件（Releases）
 
 [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) 页面里有这台可正常工作的机器的备份，仅限非商业用途：
@@ -56,6 +62,7 @@ watchthelight 的 [WTLIntelGfx / XeGfx](https://github.com/watchthelight-labs/WT
 [NullMoth Systems 的 nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)（XeGfx 所分叉的 Metal 插件和加速器）、
 [VedCloud 的 Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics)（这里使用的
 Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
+[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C)（触摸板驱动）、
 [acidanthera](https://github.com/acidanthera)（OpenCore、Lilu、VirtualSMC、NVMeFix、VoodooPS2、BrcmPatchRAM、UEFIGraphicsFB）、
 [OpenIntelWireless](https://github.com/OpenIntelWireless)（itlwm、IntelBluetoothFirmware），以及 Mesa、libdrm 和 LLVM。
 
@@ -67,6 +74,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `fbreloc/` - XgFbMove 共用的帧缓冲重定位逻辑，附主机测试（Windows，clang + Python）
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
+- `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C 以及轮询启动参数
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
 
 ## 许可证

@@ -19,3 +19,9 @@ bt/kexts*/
 bt/downloads/
 bt/backup-*/
 release/public-*/
+touchpad/kexts/
+touchpad/backup-*/
+touchpad/downloads/
+touchpad/dsdt/
+touchpad/src/
+touchpad/x/

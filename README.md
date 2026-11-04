@@ -37,6 +37,12 @@ predates Sequoia and the stack restarts every ~16 s) and BlueToolFixup 2.7.2 in 
 (`bt/add-bluetooth.sh apply`); the NVRAM keys `bluetoothExternalDongleFailed` and `bluetoothInternalControllerInfo`
 (`bt/bt-nvram.sh set`); a restart. AirDrop, Handoff and Continuity do not work with a non-Apple controller.
 
+## Touchpad
+
+The touchpad is a Goodix GXTP5100 on the I2C bus, not PS/2. It works with VoodooI2C 2.9.1 patched with a Meteor Lake
+PCI ID (`8086:7E78`) and the boot-arg `-vi2c-force-polling` (VoodooGPIO has no table for this board's GPIO controller
+`INTC1083`). Details and scripts: `touchpad/README.txt`.
+
 ## Binaries (Releases)
 
 The [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) page has a backup of the working machine,
@@ -59,6 +65,7 @@ repository patches), [NullMoth Systems' nvidia-macos-driver](https://github.com/
 Metal plugin and accelerator XeGfx forks),
 [VedCloud's Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics) (the
 Meteor Lake AirportItlwm build, the MADT layout and SSDT-PLUG-ALT used here),
+[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C) (the touchpad driver),
 [acidanthera](https://github.com/acidanthera) (OpenCore, Lilu, VirtualSMC, NVMeFix, VoodooPS2, BrcmPatchRAM,
 UEFIGraphicsFB), [OpenIntelWireless](https://github.com/OpenIntelWireless) (itlwm, IntelBluetoothFirmware), Mesa,
 libdrm and LLVM.
@@ -72,6 +79,7 @@ libdrm and LLVM.
 - `fbreloc/` - the framebuffer relocation logic shared by XgFbMove, with host tests (Windows, clang + Python)
 - `opencore/` - the OpenCore package builder used here (configs and kexts are not in the source tree; see Releases)
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
+- `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI and the polling boot-arg
 - `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences
 
 ## Licences
