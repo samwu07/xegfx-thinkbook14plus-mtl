@@ -38,10 +38,26 @@ IntelBluetoothFirmware + IntelBTPatcher **2.5.0**（OpenIntelWireless master 分
 
 ## 二进制文件（Releases）
 
-[Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) 页面里有这台可正常工作的机器的备份：
-实际启动用的 OpenCore EFI（序列号、MLB、ROM 和 SystemUUID 已替换为占位值，启动前请生成你自己的 SMBIOS），
-以及已安装的 XeGfx 内核扩展和 Metal 插件。它们由 `release/collect-release.sh` 生成，
-只适用于这款笔记本和 macOS 15.8.1。其中各部分的许可证见 `NOTICE`。
+[Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) 页面里有这台可正常工作的机器的备份，仅限非商业用途：
+
+- `EFI-CLEAN-07Y-public-*.zip`：实际启动用的 OpenCore EFI，**但缺少三样需要你自己补上的东西**（压缩包里的
+  `README-FIRST.txt` 有说明）：你自己的 SMBIOS（序列号、MLB、ROM 和 SystemUUID 是占位值）、AMFIPass（只有二进制文件，
+  没有允许转发的许可证），以及打过补丁的 DSDT 和 MADT（它们是联想固件代码；请导出你自己机器的表并按列出的修改打补丁，
+  相应脚本计划加入本仓库）。
+- `xegfx-drivers-*.zip`：已安装的 XeGfx 内核扩展、Metal 插件、Mesa ANV 以及开机自启文件。
+
+每个压缩包都带有 `THIRD-PARTY.txt`（列出每个二进制文件的来源、许可证和源码位置）和 `LICENSES/`。它们由
+`release/collect-release.sh` 和 `release/pack-public.sh` 生成，只适用于这款笔记本和 macOS 15.8.1。
+
+## 致谢
+
+本项目建立在他人的工作之上：
+watchthelight 的 [WTLIntelGfx / XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx)（本仓库所修补的 Intel 驱动）、
+[NullMoth Systems 的 nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)（XeGfx 所分叉的 Metal 插件和加速器）、
+[VedCloud 的 Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics)（这里使用的
+Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
+[acidanthera](https://github.com/acidanthera)（OpenCore、Lilu、VirtualSMC、NVMeFix、VoodooPS2、BrcmPatchRAM、UEFIGraphicsFB）、
+[OpenIntelWireless](https://github.com/OpenIntelWireless)（itlwm、IntelBluetoothFirmware），以及 Mesa、libdrm 和 LLVM。
 
 ## 目录结构
 
@@ -51,10 +67,10 @@ IntelBluetoothFirmware + IntelBTPatcher **2.5.0**（OpenIntelWireless master 分
 - `fbreloc/` - XgFbMove 共用的帧缓冲重定位逻辑，附主机测试（Windows，clang + Python）
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
-- `release/` - 收集 EFI（去除本机身份信息）和驱动，用于发布 Release
+- `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
 
 ## 许可证
 
 见 `NOTICE`（以英文为准）。简要来说：本仓库自己的脚本和代码采用 BSD-2-Clause；对 `kexts/XeGfxAccel` 的补丁
-（`xeflip.patch`、`gpufb.patch`、`wsmark.patch`）和对 Metal 插件的补丁（`wsmark-plugin.patch`）修改的是
+（`xeflip.patch`、`gpufb.patch`、`wsmark.patch`、`wtl-worktree.patch`）和对 Metal 插件的补丁（`wsmark-plugin.patch`）修改的是
 PolyForm Noncommercial 1.0.0 代码，沿用该许可证（禁止商业用途）；`bootvram.patch` 修改的是 BSD-2 的 XeGfxIntelFB 代码。

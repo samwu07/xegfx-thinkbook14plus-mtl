@@ -1,0 +1,12 @@
+/**
+ * \file xf86drm.c
+ * User-level interface to DRM device
+ *
+ */
+/*
+ * SPDX-FileContributor: Rickard E. (Rik) Faith <faith@valinux.com>
+ * SPDX-FileContributor: Kevin E. Martin <martin@valinux.com>
+ * SPDX-FileCopyrightText: 1999 Precision Insight, Inc., Cedar Park, Texas.
+ * SPDX-FileCopyrightText: 2000 VA Linux Systems, Inc., Sunnyvale, California.
+ * SPDX-License-Identifier: MIT
+ */

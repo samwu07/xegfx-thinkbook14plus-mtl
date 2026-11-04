@@ -39,10 +39,29 @@ predates Sequoia and the stack restarts every ~16 s) and BlueToolFixup 2.7.2 in 
 
 ## Binaries (Releases)
 
-The [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) page has a backup of the working machine:
-the OpenCore EFI as booted, with the serial number, MLB, ROM and SystemUUID replaced by placeholders (generate your own
-SMBIOS before you boot it), and the installed XeGfx kexts and Metal plugin. `release/collect-release.sh` makes them.
-They fit this exact laptop and macOS 15.8.1 only. Licences of what is inside: `NOTICE`.
+The [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) page has a backup of the working machine,
+for non-commercial use:
+
+- `EFI-CLEAN-07Y-public-*.zip`: the OpenCore EFI as booted, **minus three things you add yourself** (its
+  `README-FIRST.txt` says how): your own SMBIOS (serial number, MLB, ROM and SystemUUID are placeholders), AMFIPass
+  (binary only, no licence to pass it on), and the patched DSDT and MADT (they are Lenovo's firmware code; dump your own
+  and apply the listed changes, a script for that is planned).
+- `xegfx-drivers-*.zip`: the installed XeGfx kexts, Metal plugin, Mesa ANV and the autostart files.
+
+Each zip has `THIRD-PARTY.txt` (every binary, its origin, licence and source) and `LICENSES/`. Made with
+`release/collect-release.sh` and `release/pack-public.sh`. They fit this exact laptop and macOS 15.8.1 only.
+
+## Credits
+
+This is built on other people's work:
+[WTLIntelGfx / XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx) by watchthelight (the Intel driver this
+repository patches), [NullMoth Systems' nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver) (the
+Metal plugin and accelerator XeGfx forks),
+[VedCloud's Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics) (the
+Meteor Lake AirportItlwm build, the MADT layout and SSDT-PLUG-ALT used here),
+[acidanthera](https://github.com/acidanthera) (OpenCore, Lilu, VirtualSMC, NVMeFix, VoodooPS2, BrcmPatchRAM,
+UEFIGraphicsFB), [OpenIntelWireless](https://github.com/OpenIntelWireless) (itlwm, IntelBluetoothFirmware), Mesa,
+libdrm and LLVM.
 
 ## Layout
 
@@ -53,10 +72,10 @@ They fit this exact laptop and macOS 15.8.1 only. Licences of what is inside: `N
 - `fbreloc/` - the framebuffer relocation logic shared by XgFbMove, with host tests (Windows, clang + Python)
 - `opencore/` - the OpenCore package builder used here (configs and kexts are not in the source tree; see Releases)
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
-- `release/` - collecting the EFI (with the Mac's identity removed) and the drivers for a Release
+- `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences
 
 ## Licences
 
 See `NOTICE`. In short: own scripts and code are BSD-2-Clause; the patches to `kexts/XeGfxAccel` (`xeflip.patch`,
-`gpufb.patch`, `wsmark.patch`) and to the Metal plugin (`wsmark-plugin.patch`) modify PolyForm Noncommercial 1.0.0 code and stay under that licence (no commercial use);
+`gpufb.patch`, `wsmark.patch`, `wtl-worktree.patch`) and to the Metal plugin (`wsmark-plugin.patch`) modify PolyForm Noncommercial 1.0.0 code and stay under that licence (no commercial use);
 `bootvram.patch` modifies BSD-2 XeGfxIntelFB code.
