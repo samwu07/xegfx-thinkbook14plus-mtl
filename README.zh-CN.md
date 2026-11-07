@@ -13,7 +13,7 @@
 
 | 问题 | 解决办法（位置） |
 |---|---|
-| GOP 帧缓冲位于 GGTT `0xFE800000`，越过了 `GUC_GGTT_TOP`：第 4 阶段拒绝运行（-28），或 GuC 镜像在屏幕上显示成一条色带（上游 issue #13） | `XgFbMove.kext` 在 XeGfx 加载前，从 macOS 中把帧缓冲的 GGTT 映射移到一段空闲区域（`0x80000000`），并在 vblank 时重新指向 `PLANE_SURF`；热重启后会回收残留旧条目的区域（`metal-stack/xgfbmove`，逻辑在 `fbreloc/fbreloc_core.h`，主机测试在 `fbreloc/test_fbreloc.py`） |
+| GOP 帧缓冲位于 GGTT `0xFE800000`，越过了 `GUC_GGTT_TOP`：第 4 阶段拒绝运行（-28），或 GuC 镜像在屏幕上显示成一条色带（上游 issue #13） | `XgFbMove.kext` 在 XeGfx 加载前，从 macOS 中把帧缓冲的 GGTT 映射移到一段空闲区域（`0x80000000`），并在 vblank 时重新指向 `PLANE_SURF`；热重启后会回收残留旧条目的区域（`metal-stack/xgfbmove`，逻辑在 `fbreloc/fbreloc_core.h`，主机测试在 `fbreloc/test_fbreloc.py`）。已在上游修复：[WTLIntelGfx#16](https://github.com/watchthelight-labs/WTLIntelGfx/pull/16)，第 4 阶段自行移动帧缓冲，因此只有 0.0.47 需要 XgFbMove，直到包含 #16 的发布版本推出 |
 | 在登录密码界面卡死 | 按上游建议设置 `xegfx.nvram_trace=0` |
 | WindowServer 在 Intel Metal 设备上反复崩溃 | CoreDisplay 预编译的 `default.metallib` 需要 AIR 位码读取器：把 MacPorts LLVM 20 的 `libLLVM.dylib` 重新链接后放进插件的 `air-runtime/`（`metal-stack/desktop/add-bitcode-reader.sh`） |
 | 没有任何帧到达加速器（IOPresentment 关闭，上游 I-108） | GOP 帧缓冲位于 stolen memory，不在 GFX0 的两个 BAR 内，所以 GFX0 上的 IONDRVFramebuffer 始终没有上线，WindowServer 一直停在 UEFIGraphicsFB 的帧缓冲上。XeGfxIntelFB + `metal-stack/xeintelfb/bootvram.patch`：把控制台区域加为 GFX0 的设备内存，设置 `IOFBDependentID/Index`，并为 AGDC 提供屏幕 EDID 时序。另需 `debug.xegfx_agdc_k5=1` 和 `debug.nvaccel_iop=1`（`desktop-on.sh`） |
