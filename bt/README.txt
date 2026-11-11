@@ -18,4 +18,14 @@ A Windows deploy (work\deploy-sn750-clean07*.bat) replaces the EFI and drops the
 Kernel/Add entries into the work folder's EFI, or run  sudo bash /Volumes/PKG/bt/add-bluetooth.sh apply  again after it.
 A full NVRAM reset (OpenCore "Reset NVRAM") drops the two keys: sudo bash /Volumes/PKG/bt/bt-nvram.sh set.
 Undo: sudo bash /Volumes/PKG/bt/add-bluetooth.sh undo (config from the newest backup-*), bt-nvram.sh unset.
-Not available on a non-Apple controller: AirDrop, Handoff, Continuity, Apple Watch unlock.
+Continuity, tested 2026-11-07 with AirportItlwm 2.4.0 and an iPhone:
+  Handoff and Universal Clipboard work from iPhone to Mac only, and only with iCloud Keychain on (without it the Handoff
+  key exchange fails). Mac to iPhone does not work; at boot bluetoothd logs LE_InitMultipleAdvertising failed (STATUS 152),
+  the likely cause. Not checked after sleep or restart.
+  AirDrop from Mac to iPhone works without awdl0, with both on the same Wi-Fi: two files arrived and opened, over QUIC on
+  en0 (transport localWiFi). The Mac UI still reported failure, and an earlier try failed with DNS Error: Refused, so it is
+  not fully reliable. iPhone to Mac did not work in one test: the Mac's AirDrop server logs
+  "Failed to initialize nw_interface, defaulting to loopback" and publishes _airdrop._tcp locally only. Re-advertising
+  it on en0 with dns-sd did not help: the iPhone still did not list the Mac.
+  iPhone Mirroring is not available: Apple requires Apple silicon or a T2 chip (not launched here).
+  Apple Watch unlock: not tested.

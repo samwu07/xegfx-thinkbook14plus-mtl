@@ -36,7 +36,9 @@ Intel CNVi 蓝牙（`8087:0033`，固件 `ibt-0180-0041`）需要以下三项同
 IntelBluetoothFirmware + IntelBTPatcher **2.5.0**（OpenIntelWireless master 分支的 Dortania 构建版；2.4.0 的 IntelBTPatcher
 早于 Sequoia，蓝牙栈每约 16 秒重启一次）和 BlueToolFixup 2.7.2，放在 `Kernel/Add` 中 Lilu 之后
 （`bt/add-bluetooth.sh apply`）；NVRAM 键 `bluetoothExternalDongleFailed` 和 `bluetoothInternalControllerInfo`
-（`bt/bt-nvram.sh set`）；然后重启。非 Apple 的蓝牙控制器不支持隔空投送（AirDrop）、接力（Handoff）和连续互通（Continuity）。
+（`bt/bt-nvram.sh set`）；然后重启。
+使用 AirportItlwm 2.4.0 并打开 iCloud 钥匙串后，接力（Handoff）和通用剪贴板只能从 iPhone 到 Mac；Mac 到 iPhone 不通，最可能的原因是
+bluetoothd 中 `LE_InitMultipleAdvertising` 失败。隔空投送（AirDrop）在同一 Wi-Fi 下可从 Mac 发到 iPhone，不需要 `awdl0`，但 Mac 可能仍显示失败，之前也失败过一次；iPhone 发到 Mac 在一次测试中不通。iPhone 镜像需要 Apple 芯片或 T2 芯片。详见 `bt/README.txt`。
 
 ## 触摸板
 

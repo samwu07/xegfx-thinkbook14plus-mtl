@@ -37,7 +37,11 @@ Intel CNVi Bluetooth (`8087:0033`, firmware `ibt-0180-0041`) works with three th
 IntelBluetoothFirmware + IntelBTPatcher **2.5.0** (the Dortania build of OpenIntelWireless master; 2.4.0's IntelBTPatcher
 predates Sequoia and the stack restarts every ~16 s) and BlueToolFixup 2.7.2 in `Kernel/Add` after Lilu
 (`bt/add-bluetooth.sh apply`); the NVRAM keys `bluetoothExternalDongleFailed` and `bluetoothInternalControllerInfo`
-(`bt/bt-nvram.sh set`); a restart. AirDrop, Handoff and Continuity do not work with a non-Apple controller.
+(`bt/bt-nvram.sh set`); a restart.
+With AirportItlwm 2.4.0 and iCloud Keychain on, Handoff and Universal Clipboard work from iPhone to Mac only; Mac to iPhone does
+not work, most likely because `LE_InitMultipleAdvertising` fails in bluetoothd. AirDrop from Mac to iPhone works on the same
+Wi-Fi without `awdl0`, though the Mac may report failure and an earlier try failed; iPhone to Mac did not work in one test. iPhone
+Mirroring requires Apple silicon or a T2 chip. See `bt/README.txt`.
 
 ## Touchpad
 
