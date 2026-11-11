@@ -56,8 +56,8 @@ for non-commercial use:
 
 - `EFI-CLEAN-07Y-public-*.zip`: the OpenCore EFI as booted, **minus three things you add yourself** (its
   `README-FIRST.txt` says how): your own SMBIOS (serial number, MLB, ROM and SystemUUID are placeholders), AMFIPass
-  (binary only, no licence to pass it on), and the patched DSDT and MADT (they are Lenovo's firmware code; dump your own
-  and apply the listed changes, a script for that is planned).
+  (binary only, no licence to pass it on), and the patched DSDT and MADT (they are Lenovo's firmware code: on Windows,
+  `acpi/make-acpi-tables.cmd` makes both from your machine's own tables, see `acpi/README.txt`).
 - `xegfx-drivers-*.zip`: the installed XeGfx kexts, Metal plugin, Mesa ANV and the autostart files.
 
 Each zip has `THIRD-PARTY.txt` (every binary, its origin, licence and source) and `LICENSES/`. Made with
@@ -87,6 +87,7 @@ libdrm and LLVM.
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
 - `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI and the polling boot-arg
 - `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences
+- `acpi/` - making the EFI's patched DSDT and MADT from your own firmware, on Windows (`make-acpi-tables.cmd`)
 
 ## Licences
 
