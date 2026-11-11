@@ -1,0 +1,132 @@
+renderfix-plugin.patch -- jxy333967's render-barrier snapshot refresh and read-only row-pitch fallback for NVMTL, from
+https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2 (source pinned at jxy333967/jianxunyun@dfeaac89c81a,
+xegfx-render-fixes/patches/0001-nvmtl-row-pitch-and-render-barrier.patch), rebased onto wsmark-plugin.patch and
+hostsync-plugin.patch. Only change downstream: its CDX log lines are rate-limited (WindowServer hits them every frame).
+Plugin code: PolyForm Noncommercial 1.0.0 (unchanged). Applied by 9-wsmark-plugin.sh.
+
+--- pa/plugin/NVMTLObjects.h
++++ pb/plugin/NVMTLObjects.h
+@@ -19,6 +19,7 @@
+ @class NVMTLHeap;
+ @interface NVMTLBuffer : NSObject <MTLBuffer> { @public nvk_buffer _b; MTLStorageMode _storage; NVMTLHeap *_heap; NSUInteger _heapOffset;
+     void *_hostPtr; size_t _hostLen; id _hostDealloc;
++    NVMTLBuffer *_rowSource; size_t _rowSourceOff, _rowHostPitch, _rowGPUPitch, _rowBytes, _rowCount;
+     NVMTLHeap *_subHeap; NSUInteger _subCharge; BOOL _aliased;
+     nvk_buffer _shadow; int _syncOut; int _zshadow;
+     NSUInteger _dirtyLo, _dirtyHi; } @end
+--- pa/plugin/NVMTLObjects.m
++++ pb/plugin/NVMTLObjects.m
+@@ -840,6 +840,31 @@
+     const BOOL brec = !noRecycle && _nbpk && nvmtl_bpark_take(self, bkey, &t->_i) == 0;
+     if (!brec && nvmtl_vk_image_create_buffer_alias((uint32_t)w, (uint32_t)h, vkf, bpp, a8, (d.usage & MTLTextureUsageShaderWrite) != 0,
+                                            (d.usage & MTLTextureUsageRenderTarget) != 0, &_b, offset, bpr, &t->_i)) {
++        const size_t cdxCPUCapacity = _hostPtr && _hostLen < _b.size ? _hostLen : _b.size;
++        // CDX read-only compatibility view: preserve the hardware pitch requirement,
++        // repack rows into a private aligned backing, and resync on every submission.
++        // Only the exact observed BGRA8 single-level, CPU-visible shader-read case.
++        if (d.pixelFormat == MTLPixelFormatBGRA8Unorm && d.usage == MTLTextureUsageShaderRead
++            && bpr && (bpr % 32) && bpr >= w * 4 && offset <= cdxCPUCapacity
++            && h - 1 <= (SIZE_MAX - w * 4) / bpr
++            && bpr * (h - 1) + w * 4 <= cdxCPUCapacity - offset && [self contents]
++            && bpr <= SIZE_MAX - 255) {
++            const size_t pitch = (bpr + 255) & ~(size_t)255;
++            if (h <= SIZE_MAX / pitch) {
++                NVMTLBuffer *sb = [NVMTLBuffer new];
++                if (sb && !nvmtl_vk_buffer_create(pitch * h, 1, &sb->_b) && sb->_b.map) {
++                    sb->_storage = MTLStorageModeShared;
++                    sb->_rowSource = self; sb->_rowSourceOff = offset;
++                    sb->_hostPtr = (char *)[self contents] + offset;
++                    sb->_hostLen = bpr * (h - 1) + w * 4;
++                    sb->_rowHostPitch = bpr; sb->_rowGPUPitch = pitch;
++                    sb->_rowBytes = w * 4; sb->_rowCount = h;
++                    memset(sb->_b.map, 0, pitch * h); nvmtl_buffer_sync_in(sb);
++                    id<MTLTexture> v = [sb newTextureWithDescriptor:d offset:0 bytesPerRow:pitch];
++                    if (v) { static unsigned said; if (said++ < 8) nvlog("CDX pitched readonly view: %zux%zu row %lu -> %zu, resync every submission", w, h, (unsigned long)bpr, pitch); return v; }
++                }
++            }
++        }
+         // <wtl> WindowServer's Terminal strips and iconservicesagent's icons ask for views that run past the end of their
+         // buffer (mostly NoCopy, so no spare page): give those a stand-in sized to the view, refilled from the caller's bytes
+         // at every submission it is used in (and copied back when written)
+@@ -1438,9 +1463,9 @@
+     if (c) { if (p) [h nvmtlGiveRange:o length:c]; [h nvmtlReleaseSubAllocation:c]; }
+ }
+ - (MTLTextureUsage)usage { if (_usage) return (MTLTextureUsage)_usage; if (_parent) return [_parent usage]; return MTLTextureUsageShaderRead; }
+-- (id<MTLBuffer>)buffer { return _backBuf ? _backBuf : _parent ? [_parent buffer] : nil; }
+-- (NSUInteger)bufferOffset { return _backBuf ? _backOff : _parent ? [_parent bufferOffset] : 0; }
+-- (NSUInteger)bufferBytesPerRow { return _backBuf ? _backBPR : _parent ? [_parent bufferBytesPerRow] : 0; }
++- (id<MTLBuffer>)buffer { return _backBuf ? (_backBuf->_rowSource ?: _backBuf) : _parent ? [_parent buffer] : nil; }
++- (NSUInteger)bufferOffset { return _backBuf ? (_backBuf->_rowSource ? _backBuf->_rowSourceOff : _backOff) : _parent ? [_parent bufferOffset] : 0; }
++- (NSUInteger)bufferBytesPerRow { return _backBuf ? (_backBuf->_rowSource ? _backBuf->_rowHostPitch : _backBPR) : _parent ? [_parent bufferBytesPerRow] : 0; }
+ - (BOOL)isShareable { return _parent ? NO : _shareable; }
+ - (MTLTextureSwizzleChannels)swizzle { return _hasSwz ? _swz : MTLTextureSwizzleChannelsMake(MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleBlue, MTLTextureSwizzleAlpha); }
+ - (BOOL)isSparse { NVMTLTexture *r = _parent ? _parent : self; return (r->_heap && r->_heap->_type == MTLHeapTypeSparse) || (r->_subHeap && r->_subHeap->_type == MTLHeapTypeSparse); }
+@@ -3642,10 +3667,41 @@
+ - (void)useHeap:(id<MTLHeap>)h {}
+ - (void)useHeap:(id<MTLHeap>)h stages:(MTLRenderStages)st {}
+ - (void)sampleCountersInBuffer:(id)sb atSampleIndex:(NSUInteger)i withBarrier:(BOOL)b { nvmtl_sample_counter(_cb, sb, i, self, b); }
+-- (void)textureBarrier { nvmtl_vk_cmd_barrier(&_cb->_c); }
++- (void)nvmtlRefreshSnapshotAtTextureBarrier {
++    // <xegfx> WindowServer reaches this every frame: the three CDX lines are rate-limited downstream (samwu07)
++    { static unsigned said; if (said++ < 8) nvlog("CDX barrier route: snap %d begun %d depth %d samples %u", _snap != nil, _begun, _passDepth, _passSamples); }
++    // Restrict this correction to the observed single-colour, single-sample
++    // snapshot path. Preserve all other existing barrier paths for separate work.
++    BOOL single = YES;
++    for (unsigned i=1; i<NVMTL_NCOL; ++i) if (_pass.col[i]) single=NO;
++    if (!_begun || !_cb->_c.in_rp || !_snap || !_target || !_ps || !single
++        || _passDepth || _pass.ds || _passSamples > 1 || _resolve || _visBuf || _visActive
++        || _target->_parent || _target->_viewParent || _target->_baseLevel || _target->_baseSlice
++        || _pass.col_level[0] || _pass.col_layer[0] || _cb->_c.self_tex) {
++        nvmtl_vk_cmd_barrier(&_cb->_c); return;
++    }
++    NVMTLTexture *root = _target->_parent ?: _target;
++    if ([root nvi]->samples > 1 || [root nvi]->layers > 1 || [root nvi]->mips > 1 || [root nvi]->fmt != [_snap nvi]->fmt
++        || [root nvi]->w != [_snap nvi]->w || [root nvi]->h != [_snap nvi]->h) {
++        nvmtl_vk_cmd_barrier(&_cb->_c); return;
++    }
++    // A pre-pass snapshot cannot satisfy a read-after-write barrier. End the
++    // physical Vulkan pass, refresh that same snapshot, and resume with LOAD.
++    // The logical Metal encoder, resource ownership and state remain intact.
++    NVMTLRenderPipelineState *saved = _ps;
++    const uint32_t oldLoad = _pass.load;
++    nvmtl_vk_cmd_end_render(&_cb->_c); _begun=NO;
++    int rc=nvmtl_vk_cmd_copy_image(&_cb->_c,[root nvi],0,0,[_snap nvi],0,0,[root nvi]->w,[root nvi]->h);
++    _pass.load |= NVMTL_LOAD_ALL;
++    [self setRenderPipelineState:saved];
++    _pass.load=oldLoad;
++    if (rc || !_begun) { [self nvmtlSamplePositionError:@"texture barrier: snapshot refresh/resume failed"]; return; }
++    { static unsigned n; if (n++ < 8 || n % 5000 == 0) nvlog("CDX texture barrier refreshed current snapshot and resumed LOAD [%u so far]", n); }
++}
++- (void)textureBarrier { [self nvmtlRefreshSnapshotAtTextureBarrier]; }
+ - (void)updateFence:(id<MTLFence>)f afterStages:(MTLRenderStages)st {}
+ - (void)waitForFence:(id<MTLFence>)f beforeStages:(MTLRenderStages)st { nvmtl_vk_cmd_barrier(&_cb->_c); }
+-- (void)memoryBarrierWithScope:(MTLBarrierScope)scope afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b { nvmtl_vk_cmd_barrier(&_cb->_c); }
++- (void)memoryBarrierWithScope:(MTLBarrierScope)scope afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b { { static unsigned said; if (said++ < 8) nvlog("CDX render barrier scope %lu", (unsigned long)scope); } if(scope & MTLBarrierScopeRenderTargets) [self nvmtlRefreshSnapshotAtTextureBarrier]; else nvmtl_vk_cmd_barrier(&_cb->_c); }
+ - (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained [])r count:(NSUInteger)n afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b { nvmtl_vk_cmd_barrier(&_cb->_c); }
+ - (void)drawPrimitives:(MTLPrimitiveType)type indirectBuffer:(id<MTLBuffer>)buf indirectBufferOffset:(NSUInteger)off {
+     NVMTLBuffer *nb = (NVMTLBuffer *)buf;
+@@ -6009,7 +6065,11 @@
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
+     if (!nvmtl_host_readable(b)) return;
+     const uint64_t t0 = nvmtl_perf_now();
+-    memcpy(b->_b.map, b->_hostPtr, b->_hostLen);
++    if (b->_rowSource) {
++        void *host = [b->_rowSource contents]; if (!host) return;
++        for (size_t y=0; y<b->_rowCount; ++y)
++            memcpy((char *)b->_b.map+y*b->_rowGPUPitch, (char *)host+b->_rowSourceOff+y*b->_rowHostPitch, b->_rowBytes);
++    } else memcpy(b->_b.map, b->_hostPtr, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCIN, t0, b->_hostLen);
+ }
+ 
+@@ -6023,6 +6083,10 @@
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
+     if (b->_hostGone || !nvmtl_host_range_ok(b->_hostPtr, b->_hostLen, VM_PROT_READ | VM_PROT_WRITE)) return;
+     const uint64_t t0 = nvmtl_perf_now();
+-    memcpy(b->_hostPtr, b->_b.map, b->_hostLen);
++    if (b->_rowSource) {
++        void *host = [b->_rowSource contents]; if (!host) return;
++        for (size_t y=0; y<b->_rowCount; ++y)
++            memcpy((char *)host+b->_rowSourceOff+y*b->_rowHostPitch, (char *)b->_b.map+y*b->_rowGPUPitch, b->_rowBytes);
++    } else memcpy(b->_hostPtr, b->_b.map, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCOUT, t0, b->_hostLen);
+ }

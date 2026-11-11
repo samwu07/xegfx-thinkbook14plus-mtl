@@ -1,0 +1,70 @@
+--- pa/plugin/NVMTLObjects.h
++++ pb/plugin/NVMTLObjects.h
+@@ -282,6 +282,7 @@
+ @interface NVMTLHeap () { @public MTLHazardTrackingMode _hazard; } @end
+ @interface NVMTLIndirectCommandBuffer () { @public MTLResourceOptions _opts; } @end
+ @interface NVMTLBuffer () { @public uint32_t _purge; } @end
++@interface NVMTLBuffer () { @public BOOL _hostGone; } @end   // the caller's pages behind _hostPtr were unmapped (nvmtl_host_readable)
+ @interface NVMTLTexture () { @public uint32_t _purge; } @end
+ @interface NVMTLHeap () { @public uint32_t _purge; } @end
+ #include <os/lock.h>
+--- pa/plugin/NVMTLObjects.m
++++ pb/plugin/NVMTLObjects.m
+@@ -14,6 +14,8 @@
+ void nvlog_raw(const char *fmt, ...);
+ 
+ #import "NVMTLObjects.h"
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
+ #import <objc/runtime.h>
+ #import <objc/message.h>
+ static int nvmtl_trace_on(void);
+@@ -5972,9 +5974,40 @@
+ - (void)sampleCountersInBuffer:(id<MTLCounterSampleBuffer>)b atSampleIndex:(NSUInteger)i withBarrier:(BOOL)w { nvmtl_sample_counter(_cb, b, i, self, w); }
+ @end
+ 
++// <xegfx>
++// 2026-11-05 22:49: WindowServer crashed in the memcpy below: it had unmapped the pages behind a no-copy buffer that was
++// still alive (135168 bytes, "not in any region"). The same unmapping lost the device on 11-04 and 11-05 (see
++// xemesa/hostptr-mesa.patch). A real driver has its own hold on those pages; here a copied buffer only has the address.
++// So look before each copy. Once the pages are gone the buffer keeps its last bytes for good, because the address may
++// come back as someone else's memory. A copy-back also skips pages it may not write: read-only no-copy buffers are
++// exactly the ones that get copied. The check is one system call per region, far less than the copy it guards.
++static int nvmtl_host_range_ok(const void *ptr, size_t size, vm_prot_t need)
++{
++    mach_vm_address_t a = (mach_vm_address_t)(uintptr_t)ptr; const mach_vm_address_t end = a + size;
++    while (a < end) {
++        mach_vm_address_t ra = a; mach_vm_size_t rs = 0; vm_region_basic_info_data_64_t info;
++        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
++        if (mach_vm_region(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS) return 0;
++        if (obj != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), obj);
++        if (ra > a || (info.protection & need) != need) return 0;
++        a = ra + rs;
++    }
++    return 1;
++}
++static int nvmtl_host_readable(NVMTLBuffer *b)
++{
++    if (b->_hostGone) return 0;
++    if (nvmtl_host_range_ok(b->_hostPtr, b->_hostLen, VM_PROT_READ)) return 1;
++    b->_hostGone = YES;
++    static unsigned n; if (n++ < 8 || n % 1000 == 0)
++        nvlog("buffer: the caller unmapped the %zu bytes at %p behind a live no-copy buffer; it keeps its last bytes [%u so far]", b->_hostLen, b->_hostPtr, n);
++    return 0;
++}
++// </xegfx>
+ static void nvmtl_buffer_sync_in(NVMTLBuffer *b)
+ {
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
++    if (!nvmtl_host_readable(b)) return;
+     const uint64_t t0 = nvmtl_perf_now();
+     memcpy(b->_b.map, b->_hostPtr, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCIN, t0, b->_hostLen);
+@@ -5988,6 +6021,7 @@
+         return;
+     }
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
++    if (b->_hostGone || !nvmtl_host_range_ok(b->_hostPtr, b->_hostLen, VM_PROT_READ | VM_PROT_WRITE)) return;
+     const uint64_t t0 = nvmtl_perf_now();
+     memcpy(b->_hostPtr, b->_b.map, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCOUT, t0, b->_hostLen);

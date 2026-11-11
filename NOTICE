@@ -12,9 +12,15 @@ and keep the licence of the code they change:
       Noncommercial License 1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/). These patches are
       shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.
       Full text: licenses/PolyForm-Noncommercial-1.0.0.md (upstream has no "Required Notice:" lines).
-  metal-stack/xeflip/wsmark-plugin.patch
-      changes plugin/ (the NVMTLDriver Metal plugin, NullMoth Systems, SPDX PolyForm-Noncommercial-1.0.0): same terms,
-      no commercial use.
+  metal-stack/xeflip/wsmark-plugin.patch, metal-stack/xeflip/hostsync-plugin.patch,
+  metal-stack/xeflip/renderfix-plugin.patch
+      change plugin/ (the NVMTLDriver Metal plugin, NullMoth Systems, SPDX PolyForm-Noncommercial-1.0.0): same terms,
+      no commercial use. renderfix-plugin.patch is jxy333967's render-barrier and row-pitch fix
+      (https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2, source jxy333967/jianxunyun@dfeaac89c81a),
+      rebased here with its log lines rate-limited.
+  metal-stack/xeflip/renderfix-tests/
+      jxy333967's test programs, Copyright (c) 2026 jxy333967, BSD 2-Clause (their LICENSE and NOTICE are in that
+      folder).
   metal-stack/xeintelfb/bootvram.patch
       changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
       Full text: licenses/WTLIntelGfx-LICENSE-BSD-2-Clause.txt.

@@ -20,14 +20,16 @@ pinned commit (`a3fd73ed`, tag v0.0.47) on the Mac.
 | 0 frames reached the accelerator (IOPresentment off, upstream I-108) | The GOP framebuffer lives in stolen memory, outside both GFX0 BARs, so IONDRVFramebuffer on GFX0 never came online and WindowServer stayed on UEFIGraphicsFB's framebuffer. XeGfxIntelFB + `metal-stack/xeintelfb/bootvram.patch`: console range added as GFX0 device memory, `IOFBDependentID/Index`, the panel's EDID timing for AGDC. Plus `debug.xegfx_agdc_k5=1` and `debug.nvaccel_iop=1` (`desktop-on.sh`) |
 | Every frame copied by the CPU (22.5 MiB at 3072x1920) | Experimental Intel zero-copy flip in XeGfxAccel: WindowServer's surfaces are mapped into free GGTT ranges once and `PLANE_SURF` is flipped at vblank (`metal-stack/xeflip`, `desktop/xeflip.sh try`). Measured: 602 frames flipped, 0 copied, 0 failures |
 | Desktop capped at ~30 frames/s: WindowServer composited on a 30 Hz beat | The boot NDRV under XeGfxIntelFB had no VBL source. XeGfxIntelFB 0.9.4 registers one, driven by pipe A's frame counter (~58 Hz; boot-arg `-xeintelfbnovbl` turns it off). Plus WindowServer's completion marks on the accelerator's `XGDR` connection, so it stops waiting for each composite (`xeflip/wsmark.patch` in XeGfxAccel 0.9.4 and later, `xeflip/wsmark-plugin.patch` via `9-wsmark-plugin.sh`; on by default, `WSMARK=0` turns them off). Measured with `desktop/fps-gaps`: ~58-60 frames/s while dragging a window |
+| WindowServer crash (SIGSEGV in `nvmtl_buffer_sync_in`) after hours of use | WindowServer unmapped the pages behind a no-copy buffer that was still alive; the plugin copies read-only ones and refreshed them from the dead address, and also wrote results back into read-only pages. `xeflip/hostsync-plugin.patch` checks the pages before both copies (`9-wsmark-plugin.sh`; repro `desktop/hostsync-test.sh`) |
+| Widget corners cut off, behind-window blur ("vibrancy") see-through, odd colour blocks | Texture barriers did not refresh the snapshot a draw reads when it samples its own target. `xeflip/renderfix-plugin.patch` by [jxy333967](https://github.com/jxy333967) ([issue #2](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2)) refreshes it, and gives pitched read-only CPU views an aligned copy (`9-wsmark-plugin.sh`). Their tests, `desktop/renderfix-test.sh`: 512/1024 wrong pixels before, 0 after |
 | Recurring kernel panic `Kernel trap at 0xffffffff....1130` 1-5 min after Wi-Fi connects | Not graphics: AirportItlwm 2.4.0 (VedCloud, for the 7E40 card) `iwx_rm_sta_cmd` walks 16 TIDs over a 9-entry table and corrupts `mac_ctxt_task`. Two-byte OpenCore `Kernel/Patch` in `opencore/build_clean07.py` (`ITLWM_FIND` / `ITLWM_REPL`) |
 
 The desktop starts at boot (`desktop/autostart-boot.sh`, a LaunchDaemon; pause it with
 `/Library/XeGfx/desktop/autostart-off`).
 
 Known issues: the panel stays at the firmware's 60 Hz (XeGfx never mode-sets); apps need a `!App` line in
-`/Library/GPUBundles/nvmtl-allow.txt` to get the Metal device; behind-window blur ("vibrancy") is see-through
-(Reduce transparency works around it); some widget corners and materials (Weather text, cyan tints) draw wrong.
+`/Library/GPUBundles/nvmtl-allow.txt` to get the Metal device. The see-through blur and wrong widget corners are fixed
+by `renderfix-plugin.patch` (above); other materials may still draw wrong.
 
 ## Bluetooth
 
@@ -65,7 +67,7 @@ repository patches), [NullMoth Systems' nvidia-macos-driver](https://github.com/
 Metal plugin and accelerator XeGfx forks),
 [VedCloud's Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics) (the
 Meteor Lake AirportItlwm build, the MADT layout and SSDT-PLUG-ALT used here),
-[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C) (the touchpad driver),
+[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C) (the touchpad driver), [jxy333967](https://github.com/jxy333967) (the render-barrier fix and its tests),
 [acidanthera](https://github.com/acidanthera) (OpenCore, Lilu, VirtualSMC, NVMeFix, VoodooPS2, BrcmPatchRAM,
 UEFIGraphicsFB), [OpenIntelWireless](https://github.com/OpenIntelWireless) (itlwm, IntelBluetoothFirmware), Mesa,
 libdrm and LLVM.
@@ -85,5 +87,5 @@ libdrm and LLVM.
 ## Licences
 
 See `NOTICE`. In short: own scripts and code are BSD-2-Clause; the patches to `kexts/XeGfxAccel` (`xeflip.patch`,
-`gpufb.patch`, `wsmark.patch`, `wtl-worktree.patch`) and to the Metal plugin (`wsmark-plugin.patch`) modify PolyForm Noncommercial 1.0.0 code and stay under that licence (no commercial use);
+`gpufb.patch`, `wsmark.patch`, `wtl-worktree.patch`) and to the Metal plugin (`wsmark-plugin.patch`, `hostsync-plugin.patch`, `renderfix-plugin.patch`) modify PolyForm Noncommercial 1.0.0 code and stay under that licence (no commercial use);
 `bootvram.patch` modifies BSD-2 XeGfxIntelFB code.

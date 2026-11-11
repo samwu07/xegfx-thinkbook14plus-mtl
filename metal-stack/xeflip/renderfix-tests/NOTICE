@@ -1,0 +1,5 @@
+New documentation, test harnesses and tooling: Copyright (c) 2026 jxy333967. BSD-2-Clause (LICENSE).
+Driver patches are changes to WTLIntelGfx plugin/, derived from NullMoth Systems nvidia-macos-driver. Copyright (c) 2026 NullMoth Systems; upstream work by watchthelight. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0. Patches retain the upstream noncommercial terms; full license in licenses/PolyForm-Noncommercial-1.0.0.md. https://polyformproject.org/licenses/noncommercial/1.0.0/
+No commercial rights to the patched driver are granted by the BSD license of this package's new tools/docs/tests. This is source-available research, not an OSI-approved open-source driver license.
+Based on watchthelight-labs/WTLIntelGfx v0.0.47, a3fd73ed68ae82af7d3c6a80ec4336507e944ed7. Also credits samwu07/xegfx-thinkbook14plus-mtl for the working Meteor Lake/Sequoia stack and deployment documentation. No third-party binaries, Apple software, firmware, ACPI tables or EFI identities are distributed.
+Prepared with assistance from Codex; real-hardware visual results were reported by the machine's user. AI assistance is not independent hardware validation.

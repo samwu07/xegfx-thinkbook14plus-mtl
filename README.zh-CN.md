@@ -19,14 +19,16 @@
 | 没有任何帧到达加速器（IOPresentment 关闭，上游 I-108） | GOP 帧缓冲位于 stolen memory，不在 GFX0 的两个 BAR 内，所以 GFX0 上的 IONDRVFramebuffer 始终没有上线，WindowServer 一直停在 UEFIGraphicsFB 的帧缓冲上。XeGfxIntelFB + `metal-stack/xeintelfb/bootvram.patch`：把控制台区域加为 GFX0 的设备内存，设置 `IOFBDependentID/Index`，并为 AGDC 提供屏幕 EDID 时序。另需 `debug.xegfx_agdc_k5=1` 和 `debug.nvaccel_iop=1`（`desktop-on.sh`） |
 | 每一帧都由 CPU 拷贝（3072x1920 下 22.5 MiB） | XeGfxAccel 中实验性的 Intel 零拷贝翻页：WindowServer 的表面只在空闲 GGTT 区域映射一次，在 vblank 时翻转 `PLANE_SURF`（`metal-stack/xeflip`，`desktop/xeflip.sh try`）。实测：翻页 602 帧，拷贝 0 帧，失败 0 次 |
 | 桌面被限制在约 30 帧/秒：WindowServer 以 30 Hz 的节拍合成 | XeGfxIntelFB 下面的启动 NDRV 没有 VBL 源。XeGfxIntelFB 0.9.4 注册了一个，由 pipe A 的帧计数器驱动（约 58 Hz；启动参数 `-xeintelfbnovbl` 可关闭）。另外，WindowServer 的完成标记改走加速器的 `XGDR` 连接，WindowServer 不再逐个等待合成完成（XeGfxAccel 0.9.4 及以后版本中的 `xeflip/wsmark.patch`，以及通过 `9-wsmark-plugin.sh` 应用的 `xeflip/wsmark-plugin.patch`；默认开启，`WSMARK=0` 关闭）。用 `desktop/fps-gaps` 测得：拖动窗口时约 58-60 帧/秒 |
+| 使用数小时后 WindowServer 崩溃（`nvmtl_buffer_sync_in` 中 SIGSEGV） | WindowServer 解除了一个仍在使用的 no-copy 缓冲区背后页面的映射；插件会复制只读的这类缓冲区，并从已失效的地址刷新，还会把结果写回只读页面。`xeflip/hostsync-plugin.patch` 在两次复制前都先检查页面（`9-wsmark-plugin.sh`；复现：`desktop/hostsync-test.sh`） |
+| 小组件圆角缺失、窗口背后的模糊（vibrancy）透明、出现异常色块 | 绘制读取自己的渲染目标时，纹理屏障没有刷新它读取的快照。[jxy333967](https://github.com/jxy333967) 的 `xeflip/renderfix-plugin.patch`（[issue #2](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2)）会刷新快照，并为带行距的只读 CPU 视图提供对齐的副本（`9-wsmark-plugin.sh`）。他们的测试 `desktop/renderfix-test.sh`：修复前 512/1024 像素错误，修复后 0 |
 | Wi-Fi 连接后 1-5 分钟反复出现内核崩溃 `Kernel trap at 0xffffffff....1130` | 与显卡无关：AirportItlwm 2.4.0（VedCloud 为 7E40 网卡制作的版本）的 `iwx_rm_sta_cmd` 在只有 9 项的表上遍历 16 个 TID，破坏了 `mac_ctxt_task`。在 `opencore/build_clean07.py` 中用一个两字节的 OpenCore `Kernel/Patch` 修复（`ITLWM_FIND` / `ITLWM_REPL`） |
 
 桌面会在开机时自动启动（`desktop/autostart-boot.sh`，一个 LaunchDaemon；创建
 `/Library/XeGfx/desktop/autostart-off` 即可暂停）。
 
 已知问题：屏幕保持在固件设定的 60 Hz（XeGfx 从不切换显示模式）；应用需要在
-`/Library/GPUBundles/nvmtl-allow.txt` 中有一行 `!App` 才能使用 Metal 设备；窗口背后的模糊效果（vibrancy）是透明的
-（可用“减少透明度”规避）；部分小组件的圆角和材质（天气文字、青色色调）绘制不正确。
+`/Library/GPUBundles/nvmtl-allow.txt` 中有一行 `!App` 才能使用 Metal 设备。模糊效果透明和小组件圆角的问题已由
+`renderfix-plugin.patch`（见上表）修复；其他材质可能仍有绘制错误。
 
 ## 蓝牙
 
@@ -62,7 +64,7 @@ watchthelight 的 [WTLIntelGfx / XeGfx](https://github.com/watchthelight-labs/WT
 [NullMoth Systems 的 nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)（XeGfx 所分叉的 Metal 插件和加速器）、
 [VedCloud 的 Meteor-Lake-Xe-LPG-Metal-Graphics](https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics)（这里使用的
 Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
-[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C)（触摸板驱动）、
+[VoodooI2C](https://github.com/VoodooI2C/VoodooI2C)（触摸板驱动）、[jxy333967](https://github.com/jxy333967)（渲染屏障修复及其测试）、
 [acidanthera](https://github.com/acidanthera)（OpenCore、Lilu、VirtualSMC、NVMeFix、VoodooPS2、BrcmPatchRAM、UEFIGraphicsFB）、
 [OpenIntelWireless](https://github.com/OpenIntelWireless)（itlwm、IntelBluetoothFirmware），以及 Mesa、libdrm 和 LLVM。
 
@@ -80,5 +82,5 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 ## 许可证
 
 见 `NOTICE`（以英文为准）。简要来说：本仓库自己的脚本和代码采用 BSD-2-Clause；对 `kexts/XeGfxAccel` 的补丁
-（`xeflip.patch`、`gpufb.patch`、`wsmark.patch`、`wtl-worktree.patch`）和对 Metal 插件的补丁（`wsmark-plugin.patch`）修改的是
+（`xeflip.patch`、`gpufb.patch`、`wsmark.patch`、`wtl-worktree.patch`）和对 Metal 插件的补丁（`wsmark-plugin.patch`、`hostsync-plugin.patch`、`renderfix-plugin.patch`）修改的是
 PolyForm Noncommercial 1.0.0 代码，沿用该许可证（禁止商业用途）；`bootvram.patch` 修改的是 BSD-2 的 XeGfxIntelFB 代码。
