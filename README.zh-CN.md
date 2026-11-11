@@ -52,8 +52,8 @@ bluetoothd 中 `LE_InitMultipleAdvertising` 失败。隔空投送（AirDrop）�
 
 - `EFI-CLEAN-07Y-public-*.zip`：实际启动用的 OpenCore EFI，**但缺少三样需要你自己补上的东西**（压缩包里的
   `README-FIRST.txt` 有说明）：你自己的 SMBIOS（序列号、MLB、ROM 和 SystemUUID 是占位值）、AMFIPass（只有二进制文件，
-  没有允许转发的许可证），以及打过补丁的 DSDT 和 MADT（它们是联想固件代码；请导出你自己机器的表并按列出的修改打补丁，
-  相应脚本计划加入本仓库）。
+  没有允许转发的许可证），以及打过补丁的 DSDT 和 MADT（它们是联想固件代码：在 Windows 上运行
+  `acpi/make-acpi-tables.cmd` 即可从你自己机器的表生成这两张表，见 `acpi/README.txt`）。
 - `xegfx-drivers-*.zip`：已安装的 XeGfx 内核扩展、Metal 插件、Mesa ANV 以及开机自启文件。
 
 每个压缩包都带有 `THIRD-PARTY.txt`（列出每个二进制文件的来源、许可证和源码位置）和 `LICENSES/`。它们由
@@ -80,6 +80,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
 - `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C 以及轮询启动参数
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
+- `acpi/` - 在 Windows 上从你自己的固件生成 EFI 所需的 DSDT 和 MADT（`make-acpi-tables.cmd`）
 
 ## 许可证
 
