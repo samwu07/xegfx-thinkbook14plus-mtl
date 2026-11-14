@@ -44,7 +44,9 @@ bluetoothd 中 `LE_InitMultipleAdvertising` 失败。隔空投送（AirDrop）�
 
 触摸板是 I2C 总线上的 Goodix GXTP5100，不是 PS/2。使用补上 Meteor Lake PCI ID（`8086:7E78`）的 VoodooI2C 2.9.1，
 并加上启动参数 `-vi2c-force-polling` 即可工作（VoodooGPIO 没有这块板子的 GPIO 控制器 `INTC1083` 的表）。
-详情和脚本见 `touchpad/README.txt`。
+此外，原版驱动在这台机器上还有两个问题：滑动时光标会冲到屏幕边缘再回来（I2C 读取时偶尔会有一份报告的某个坐标字节被读成 0），
+以及轮询永远不会进入空闲（白白占用 CPU 0 每秒约 7600 次中断）。对 VoodooI2CHID 的补丁（对可疑帧重读并投票、空闲检测）解决了这两个问题：
+滑动 40 秒内超过 120 点的跳变从 185 到 311 次降到 7 次。详情、补丁和脚本见 `touchpad/README.txt` 和 `touchpad/patches/`。
 
 ## 二进制文件（Releases）
 
@@ -78,7 +80,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `fbreloc/` - XgFbMove 共用的帧缓冲重定位逻辑，附主机测试（Windows，clang + Python）
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
-- `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C 以及轮询启动参数
+- `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C、轮询启动参数，以及修复光标飞走和空闲轮询的补丁
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
 - `acpi/` - 在 Windows 上从你自己的固件生成 EFI 所需的 DSDT 和 MADT（`make-acpi-tables.cmd`）
 

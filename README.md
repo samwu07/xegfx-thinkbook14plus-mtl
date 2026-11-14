@@ -47,7 +47,10 @@ Mirroring requires Apple silicon or a T2 chip. See `bt/README.txt`.
 
 The touchpad is a Goodix GXTP5100 on the I2C bus, not PS/2. It works with VoodooI2C 2.9.1 patched with a Meteor Lake
 PCI ID (`8086:7E78`) and the boot-arg `-vi2c-force-polling` (VoodooGPIO has no table for this board's GPIO controller
-`INTC1083`). Details and scripts: `touchpad/README.txt`.
+`INTC1083`). On top of that the stock driver made the cursor fly to the screen edge and back, because the I2C read now
+and then returns a coordinate with a zero byte for one report, and it never let the polling go idle (7,600 interrupts/s
+on CPU 0 for nothing). A patch to VoodooI2CHID (re-read and vote on suspicious frames, idle detection) fixes both: jumps
+over 120 pt in 40 s of swiping 185-311 -> 7. Details, patches and scripts: `touchpad/README.txt`, `touchpad/patches/`.
 
 ## Binaries (Releases)
 
@@ -85,7 +88,7 @@ libdrm and LLVM.
 - `fbreloc/` - the framebuffer relocation logic shared by XgFbMove, with host tests (Windows, clang + Python)
 - `opencore/` - the OpenCore package builder used here (configs and kexts are not in the source tree; see Releases)
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
-- `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI and the polling boot-arg
+- `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI, the polling boot-arg, and the patches that fix the flying cursor and the idle polling
 - `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences
 - `acpi/` - making the EFI's patched DSDT and MADT from your own firmware, on Windows (`make-acpi-tables.cmd`)
 

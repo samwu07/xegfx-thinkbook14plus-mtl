@@ -1,0 +1,84 @@
+diff --git a/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.cpp b/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.cpp
+index 3a52f02..fd2b511 100644
+--- a/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.cpp
++++ b/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.cpp
+@@ -77,6 +77,23 @@ void VoodooInputSimulatorDevice::constructReportGated(const VoodooInputEvent& mu
+     input_report->timestamp_buffer[1] = (milli_timestamp >> 0x5) & 0xFF;
+     input_report->timestamp_buffer[2] = (milli_timestamp >> 0xd) & 0xFF;
+     
++    // <local> trace: timestamp gap histogram (ms): 0, 1-3, 4-5, 6-7, 8-12, more
++    tr_reports++;
++    if (tr_last_ms) {
++        UInt64 g = milli_timestamp >= tr_last_ms ? milli_timestamp - tr_last_ms : 0;
++        tr_gap[g == 0 ? 0 : g <= 3 ? 1 : g <= 5 ? 2 : g <= 7 ? 3 : g <= 12 ? 4 : 5]++;
++        if (g == 0) tr_same_ms++;
++    }
++    tr_last_ms = milli_timestamp;
++    if (multitouch_event.contact_count != tr_last_count) tr_cnt_chg++;
++    tr_last_count = multitouch_event.contact_count;
++    if ((tr_reports & 31) == 0) {
++        char v[200];
++        snprintf(v, sizeof(v), "reports %u jumps %u idchg %u restarts %u palm %u countchg %u same-ms %u gaps(0,1-3,4-5,6-7,8-12,more) %u %u %u %u %u %u",
++                 tr_reports, tr_jumps, tr_idchg, tr_restart, tr_palm, tr_cnt_chg, tr_same_ms, tr_gap[0], tr_gap[1], tr_gap[2], tr_gap[3], tr_gap[4], tr_gap[5]);
++        setProperty("TraceSummary", v);
++    }
++
+     // finger data
+     bool input_active = input_report->Button;
+     bool is_error_input_active = false;
+@@ -152,6 +169,34 @@ void VoodooInputSimulatorDevice::constructReportGated(const VoodooInputEvent& mu
+         
+         finger_data.Angle = 0x4; // pi/2
+         finger_data.Identifier = touch_id + 1;
++
++        // <local> trace
++        if (transducer->isTransducerActive) {
++            SInt16 cx = finger_data.X, cy = finger_data.Y;
++            if (finger_data.Finger == kMT2FingerTypePalm) tr_palm++;
++            if (tr_seen[touch_id]) {
++                int dx = cx > tr_x[touch_id] ? cx - tr_x[touch_id] : tr_x[touch_id] - cx;
++                int dy = cy > tr_y[touch_id] ? cy - tr_y[touch_id] : tr_y[touch_id] - cy;
++                if (tr_id[touch_id] != finger_data.Identifier) tr_idchg++;
++                if (finger_data.State == kTouchStateStart) tr_restart++;
++                if ((dx > dy ? dx : dy) > 1200) {
++                    if (tr_jumps < 8) {
++                        char v[160], key[16];
++                        snprintf(v, sizeof(v), "i %d id %u prev (%d,%d) cur (%d,%d) state %u prevstate %u contacts %d lastcontacts %d ms %llu",
++                                 i, touch_id, tr_x[touch_id], tr_y[touch_id], cx, cy, (unsigned)finger_data.State, (unsigned)tr_st[touch_id],
++                                 multitouch_event.contact_count, tr_last_count, (unsigned long long)milli_timestamp);
++                        snprintf(key, sizeof(key), "Jump%u", tr_jumps);
++                        setProperty(key, v);
++                    }
++                    tr_jumps++;
++                    setProperty("Jumps", tr_jumps, 32);
++                }
++            }
++            tr_seen[touch_id] = true; tr_x[touch_id] = cx; tr_y[touch_id] = cy;
++            tr_id[touch_id] = finger_data.Identifier; tr_st[touch_id] = finger_data.State;
++        } else {
++            tr_seen[touch_id] = false;
++        }
+     }
+ 
+     if (input_active)
+diff --git a/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.hpp b/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.hpp
+index 17eadb7..6c13b2c 100644
+--- a/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.hpp
++++ b/VoodooInput/VoodooInputSimulator/VoodooInputSimulatorDevice.hpp
+@@ -126,6 +126,16 @@ private:
+     AbsoluteTime start_timestamp {};
+     OSData* new_get_report_buffer {nullptr};
+     bool touch_active[15] {false};
++
++    // <local> trace of the finished report (ioreg on this device): jumps of a finger between two reports (MT2 units,
++    // X +-4067, Y +-2603), identifier/state changes mid-touch, palm flags, gaps between report timestamps.
++    UInt32 tr_reports = 0, tr_jumps = 0, tr_idchg = 0, tr_palm = 0, tr_same_ms = 0, tr_restart = 0, tr_cnt_chg = 0;
++    SInt16 tr_x[15] {0}, tr_y[15] {0};
++    UInt8 tr_id[15] {0}, tr_st[15] {0};
++    bool tr_seen[15] {false};
++    UInt64 tr_last_ms = 0;
++    UInt32 tr_gap[6] {0};
++    int tr_last_count = 0;
+     IOWorkLoop* work_loop {nullptr};
+     IOCommandGate* command_gate {nullptr};
+     IOBufferMemoryDescriptor* input_report_buffer {nullptr};

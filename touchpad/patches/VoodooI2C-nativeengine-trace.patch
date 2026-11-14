@@ -1,0 +1,59 @@
+diff --git a/Multitouch Support/Native/VoodooI2CNativeEngine.cpp b/Multitouch Support/Native/VoodooI2CNativeEngine.cpp
+index 506a297..c136df3 100644
+--- a/Multitouch Support/Native/VoodooI2CNativeEngine.cpp	
++++ b/Multitouch Support/Native/VoodooI2CNativeEngine.cpp	
+@@ -81,6 +81,39 @@ MultitouchReturn VoodooI2CNativeEngine::handleInterruptReport(VoodooI2CMultitouc
+         }
+     }
+     
++    // <local> trace: a jump of the first finger between two messages (> 600 of the pad's 4149 x 2147), with the source
++    // transducer's own values at this moment
++    {
++        VoodooInputTransducer* t0 = &message.transducers[0];
++        tr_reports++;
++        if (event.contact_count >= 1 && t0->isTransducerActive) {
++            UInt32 x = t0->currentCoordinates.x, y = t0->currentCoordinates.y;
++            if (tr_seen) {
++                UInt32 dx = x > tr_x ? x - tr_x : tr_x - x, dy = y > tr_y ? y - tr_y : tr_y - y;
++                if ((dx > dy ? dx : dy) > 600) {
++                    if (tr_jumps < 8) {
++                        VoodooI2CDigitiserTransducer* s0 = (VoodooI2CDigitiserTransducer*) event.transducers->getObject(0);
++                        char v[240], key[16];
++                        snprintf(v, sizeof(v), "msg (%u,%u)->(%u,%u) src x %u y %u (last x %u y %u) press %u tip %u conf %u sid %u contacts %u count_obj %u",
++                                 tr_x, tr_y, x, y, s0 ? (unsigned)s0->coordinates.x.value() : 0, s0 ? (unsigned)s0->coordinates.y.value() : 0,
++                                 s0 ? (unsigned)s0->coordinates.x.last.value : 0, s0 ? (unsigned)s0->coordinates.y.last.value : 0,
++                                 s0 ? (unsigned)s0->tip_pressure.value() : 0, s0 ? (unsigned)s0->tip_switch.value() : 0,
++                                 s0 ? (unsigned)s0->confidence.value() : 0, s0 ? (unsigned)s0->secondary_id : 0,
++                                 (unsigned)event.contact_count, (unsigned)event.transducers->getCount());
++                        snprintf(key, sizeof(key), "MsgJump%u", tr_jumps);
++                        setProperty(key, v);
++                    }
++                    tr_jumps++;
++                    setProperty("MsgJumps", tr_jumps, 32);
++                }
++            }
++            tr_x = x; tr_y = y; tr_seen = true;
++        } else {
++            tr_seen = false;
++        }
++        if ((tr_reports & 63) == 0) setProperty("MsgReports", tr_reports, 32);
++    }
++
+     // set the thumb to improve 4F pinch and spread gesture and cross-screen dragging
+     if (valid_touch_count >= 4 || firstTransducer->physical_button.value()) {
+         // simple thumb detection: to find the lowest finger touch in the vertical direction.
+diff --git a/Multitouch Support/Native/VoodooI2CNativeEngine.hpp b/Multitouch Support/Native/VoodooI2CNativeEngine.hpp
+index a0fbadc..9c0a899 100644
+--- a/Multitouch Support/Native/VoodooI2CNativeEngine.hpp	
++++ b/Multitouch Support/Native/VoodooI2CNativeEngine.hpp	
+@@ -24,6 +24,10 @@ class EXPORT VoodooI2CNativeEngine : public VoodooI2CMultitouchEngine {
+     OSDeclareDefaultStructors(VoodooI2CNativeEngine);
+     
+     VoodooInputEvent message;
++    // <local> trace of the message handed to VoodooInput (ioreg on this object: MsgReports, MsgJumps, MsgJump<n>)
++    UInt32 tr_reports = 0, tr_jumps = 0;
++    UInt32 tr_x = 0, tr_y = 0;
++    bool tr_seen = false;
+     VoodooI2CMultitouchInterface* parentProvider;
+     IOService* voodooInputInstance;
+ 

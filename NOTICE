@@ -25,6 +25,10 @@ and keep the licence of the code they change:
       changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
       Full text: licenses/WTLIntelGfx-LICENSE-BSD-2-Clause.txt.
 
+touchpad/patches/ are changes to GPL code and keep its licence: VoodooI2C and its VoodooI2CHID satellite (GPL-3.0, the satellite
+has no licence file of its own and belongs to the VoodooI2C project), VoodooInput (GPL-2.0, acidanthera). Texts in
+release/LICENSES/spdx-GPL-3.0-only.txt and spdx-GPL-2.0-only.txt. touchpad/cursor-watch.c and the scripts are BSD 2-Clause.
+
 Not included in the repository: Apple software, upstream binaries (XeGfx.kext, built kexts, Mesa, the Metal plugin), Intel GuC
 firmware, AirportItlwm and other third-party kexts. The build scripts fetch upstream sources at pinned revisions.
 The OpenCore patch in opencore/build_clean07.py contains only the bytes it finds and replaces in AirportItlwm 2.4.0.

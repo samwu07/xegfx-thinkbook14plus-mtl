@@ -1,0 +1,563 @@
+diff --git a/VoodooI2CHID/VoodooI2CHIDDevice.cpp b/VoodooI2CHID/VoodooI2CHIDDevice.cpp
+index 9a4edbb..8cd31f5 100644
+--- a/VoodooI2CHID/VoodooI2CHIDDevice.cpp
++++ b/VoodooI2CHID/VoodooI2CHIDDevice.cpp
+@@ -9,6 +9,7 @@
+ #include <IOKit/hid/IOHIDDevice.h>
+ #include <kern/locks.h>
+ #include "VoodooI2CHIDDevice.hpp"
++#include <pexpert/pexpert.h>
+ #include "../../../VoodooI2C/VoodooI2C/VoodooI2CDevice/VoodooI2CDeviceNub.hpp"
+ 
+ #define super IOHIDDevice
+@@ -126,6 +127,118 @@ void VoodooI2CHIDDevice::getInputReport() {
+ 
+     api->readI2C(report, hid_descriptor.wMaxInputLength);
+ 
++    // <local> glitch guard: re-read a frame in which a finger jumped further than it can move, drop it if it stays bad
++    {
++        static int guard_off = -1;
++        if (guard_off < 0) {
++            char arg[8]; guard_off = PE_parse_boot_argn("-vi2c-no-glitch-guard", arg, sizeof(arg)) ? 1 : 0;
++            UInt32 v = 0; if (PE_parse_boot_argn("vi2c-glitch-step", &v, sizeof(v)) && v >= 40 && v <= 2000) gl_step = v;
++        }
++        UInt32 sz = report[0] | report[1] << 8;
++        if (!guard_off && sz >= 40 && sz <= hid_descriptor.wMaxInputLength && report[2] == 4) {
++            int tries = 0;
++            bool bad = glitchSuspicious(report, sz);
++            const UInt8 first[16] = { report[3], report[4], report[5], report[6], report[7], report[8], report[9],
++                                      report[10], report[11], report[12], report[13], report[14], report[15], report[16], report[17], report[18] };
++            UInt8 r1[72];
++            memcpy(r1, report, sz < sizeof(r1) ? sz : sizeof(r1));
++            bool genuine = false;
++            while (bad && tries < 2) {
++                tries++;
++                api->readI2C(report, hid_descriptor.wMaxInputLength);
++                sz = report[0] | report[1] << 8;
++                bad = !(sz >= 40 && sz <= hid_descriptor.wMaxInputLength && report[2] == 4) ? false : glitchSuspicious(report, sz);
++                // the pad answers a re-read with the same frame (or the next one) when the move was real: a corrupted
++                // read does not repeat, so a re-read that agrees with the first read is a fast finger, not a glitch
++                if (bad && glitchSimilar(r1, report)) { bad = false; genuine = true; }
++            }
++            if (tries && genuine) { gl_genuine++; setProperty("GlitchGenuine", gl_genuine, 32); tries = 0; }
++            if (tries) {
++                gl_bad++;
++                if (bad) gl_dropped++; else gl_fixed++;
++                if (gl_bad <= 6) {
++                    char hx[64], key[24], v[160];
++                    for (int k = 0; k < 16; k++) snprintf(hx + k * 3, 4, "%02x ", first[k]);
++                    snprintf(v, sizeof(v), "bad: %s | reread x%d %s", hx, tries, bad ? "still bad, dropped" : "ok");
++                    snprintf(key, sizeof(key), "Glitch%u", gl_bad - 1);
++                    setProperty(key, v);
++                }
++                setProperty("GlitchFrames", gl_bad, 32); setProperty("GlitchFixedByReread", gl_fixed, 32); setProperty("GlitchDropped", gl_dropped, 32);
++            }
++            if (bad && gl_consec >= 3) {      // three bad frames in a row: this is the finger now, not a glitch
++                memset(gl_seen, 0, sizeof(gl_seen));
++                bad = false;
++            }
++            if (bad) {
++                gl_consec++;
++                IOFree(report, hid_descriptor.wMaxInputLength);
++                return;
++            }
++            gl_consec = 0;
++            // <local> vote: while a finger is down, a new frame is read twice. A corrupted read does not repeat: when the two
++            // reads of the same frame (same scan time) differ, a third read decides, and a frame nobody confirms is dropped.
++            // No threshold, so it also catches small corruption. Boot-arg -vi2c-no-vote turns it off.
++            if (report[2] == 4 && sz >= 40 && sz <= hid_descriptor.wMaxInputLength) {
++                static int vote_off = -1;
++                if (vote_off < 0) { char arg[8]; vote_off = PE_parse_boot_argn("-vi2c-no-vote", arg, sizeof(arg)) ? 1 : 0; }
++                bool tip_down = false;
++                for (int f = 0; f < 5; f++) if ((report[3 + f * 7] >> 1) & 1) tip_down = true;
++                UInt16 scan = report[38] | (report[39] << 8);
++                bool vote_drop = false;
++                if (!vote_off && tip_down && !(gl_have_scan && scan == gl_last_scan)) {
++                    UInt32 maxlen = hid_descriptor.wMaxInputLength;
++                    UInt8* r2 = (UInt8*) IOMalloc(maxlen);
++                    UInt8* r3 = (UInt8*) IOMalloc(maxlen);
++                    if (r2 && r3) {
++                        api->readI2C(r2, maxlen);
++                        gl_votes++;
++                        UInt32 sz2 = r2[0] | r2[1] << 8;
++                        bool ok2 = sz2 == sz && r2[2] == 4;
++                        if (ok2 && memcmp(report + 2, r2 + 2, sz - 2) == 0) {
++                            // confirmed
++                        } else if (ok2 && (UInt16)(r2[38] | (r2[39] << 8)) == scan) {
++                            // same frame, different bytes: one of the two reads is corrupted
++                            gl_vote_mis++;
++                            if (gl_vote_mis <= 6) {
++                                char hx[100], key[16], v[240];
++                                for (int k = 0; k < 28; k++) snprintf(hx + k * 3, 4, "%02x ", report[3 + k]);
++                                char hy[100];
++                                for (int k = 0; k < 28; k++) snprintf(hy + k * 3, 4, "%02x ", r2[3 + k]);
++                                snprintf(key, sizeof(key), "Vote%u", gl_vote_mis - 1);
++                                snprintf(v, sizeof(v), "r1 %s| r2 %s", hx, hy);
++                                setProperty(key, v);
++                            }
++                            api->readI2C(r3, maxlen);
++                            UInt32 sz3 = r3[0] | r3[1] << 8;
++                            bool ok3 = sz3 == sz && r3[2] == 4;
++                            if (ok3 && memcmp(report + 2, r3 + 2, sz - 2) == 0) {
++                                gl_vote_fixed++;                       // r2 was the corrupted one
++                            } else if (ok3 && memcmp(r2 + 2, r3 + 2, sz - 2) == 0) {
++                                memcpy(report, r2, sz);                 // r1 was the corrupted one
++                                gl_vote_fixed++;
++                            } else {
++                                gl_vote_dropped++;
++                                vote_drop = true;
++                            }
++                            setProperty("VoteMismatch", gl_vote_mis, 32); setProperty("VoteFixed", gl_vote_fixed, 32); setProperty("VoteDropped", gl_vote_dropped, 32);
++                        } else {
++                            gl_vote_adv++;   // the pad had already moved on to the next frame: keep the first read
++                        }
++                        if ((gl_votes & 63) == 0) { setProperty("Votes", gl_votes, 32); setProperty("VoteAdvanced", gl_vote_adv, 32); }
++                    }
++                    if (r2) IOFree(r2, maxlen);
++                    if (r3) IOFree(r3, maxlen);
++                }
++                if (vote_drop) {
++                    IOFree(report, hid_descriptor.wMaxInputLength);
++                    return;
++                }
++                gl_last_scan = scan; gl_have_scan = true;
++                glitchAccept(report, sz);
++            }
++        }
++    }
++
+     int return_size = report[0] | report[1] << 8;
+ 
+     if (!return_size) {
+@@ -605,7 +718,14 @@ void VoodooI2CHIDDevice::simulateInterrupt(OSObject* owner, IOTimerEventSource*
+     clock_get_uptime(&cur_time);
+     SUB_ABSOLUTETIME(&cur_time, &last_multi_touch_event);
+     absolutetime_to_nanoseconds(cur_time, &nsecs);
+-    interrupt_simulator->setTimeoutMS((nsecs > 1500000000) ? INTERRUPT_SIMULATOR_TIMEOUT_IDLE : INTERRUPT_SIMULATOR_TIMEOUT_BUSY);
++    // <local> idle poll period from boot-arg vi2c-idle-ms (default 50, 5..200)
++    static UInt32 idle_ms = 0;
++    if (!idle_ms) {
++        UInt32 v = INTERRUPT_SIMULATOR_TIMEOUT_IDLE;
++        if (PE_parse_boot_argn("vi2c-idle-ms", &v, sizeof(v)) && v >= 5 && v <= 200) idle_ms = v;
++        else idle_ms = INTERRUPT_SIMULATOR_TIMEOUT_IDLE;
++    }
++    interrupt_simulator->setTimeoutMS((nsecs > 1500000000) ? idle_ms : INTERRUPT_SIMULATOR_TIMEOUT_BUSY);
+ }
+ 
+ bool VoodooI2CHIDDevice::open(IOService *forClient, IOOptionBits options, void *arg) {
+@@ -661,3 +781,43 @@ void VoodooI2CHIDDevice::stopInterrupt() {
+     }
+     is_interrupt_started = false;
+ }
++
++// <local> report = 2 length bytes, then ID 4 and 5 x {flags, X u16, Y u16, pressure u16}. Unused slots read as all zero,
++// i.e. contact id 0 with no tip: they must not reset the position kept for the real finger 0.
++bool VoodooI2CHIDDevice::glitchSuspicious(const UInt8* r, UInt32 size) {
++    for (int f = 0; f < 5; f++) {
++        const UInt8* q = r + 3 + f * 7;
++        int id = q[0] >> 4;
++        if (!((q[0] >> 1) & 1) || !gl_seen[id]) continue;
++        UInt16 x = q[1] | (q[2] << 8), y = q[3] | (q[4] << 8);
++        int dx = x > gl_x[id] ? x - gl_x[id] : gl_x[id] - x, dy = y > gl_y[id] ? y - gl_y[id] : gl_y[id] - y;
++        if ((dx > dy ? dx : dy) > (int)gl_step) return true;
++    }
++    return false;
++}
++
++void VoodooI2CHIDDevice::glitchAccept(const UInt8* r, UInt32 size) {
++    bool any = false;
++    for (int f = 0; f < 5; f++) {
++        const UInt8* q = r + 3 + f * 7;
++        if (!((q[0] >> 1) & 1)) continue;
++        int id = q[0] >> 4;
++        any = true;
++        gl_seen[id] = true; gl_x[id] = q[1] | (q[2] << 8); gl_y[id] = q[3] | (q[4] << 8);
++    }
++    if (!any) memset(gl_seen, 0, sizeof(gl_seen));   // nobody touching: the next touch starts fresh
++}
++
++// <local> true when every finger down in a is down in b, same contact id, within 40 units
++bool VoodooI2CHIDDevice::glitchSimilar(const UInt8* a, const UInt8* b) {
++    for (int f = 0; f < 5; f++) {
++        const UInt8* qa = a + 3 + f * 7;
++        const UInt8* qb = b + 3 + f * 7;
++        if (!((qa[0] >> 1) & 1)) continue;
++        if (!((qb[0] >> 1) & 1) || (qa[0] >> 4) != (qb[0] >> 4)) return false;
++        UInt16 xa = qa[1] | (qa[2] << 8), ya = qa[3] | (qa[4] << 8), xb = qb[1] | (qb[2] << 8), yb = qb[3] | (qb[4] << 8);
++        int dx = xa > xb ? xa - xb : xb - xa, dy = ya > yb ? ya - yb : yb - ya;
++        if (dx > 40 || dy > 40) return false;
++    }
++    return true;
++}
+diff --git a/VoodooI2CHID/VoodooI2CHIDDevice.hpp b/VoodooI2CHID/VoodooI2CHIDDevice.hpp
+index e720658..5ce0328 100644
+--- a/VoodooI2CHID/VoodooI2CHIDDevice.hpp
++++ b/VoodooI2CHID/VoodooI2CHIDDevice.hpp
+@@ -21,7 +21,7 @@
+ 
+ #define INTERRUPT_SIMULATOR_TIMEOUT 5
+ #define INTERRUPT_SIMULATOR_TIMEOUT_BUSY 2
+-#define INTERRUPT_SIMULATOR_TIMEOUT_IDLE 50
++#define INTERRUPT_SIMULATOR_TIMEOUT_IDLE 50   // <local> default; boot-arg vi2c-idle-ms=N
+ 
+ #define I2C_HID_PWR_ON  0x00
+ #define I2C_HID_PWR_SLEEP 0x01
+@@ -97,6 +97,21 @@ class VoodooI2CDeviceNub;
+ 
+ 
+ class EXPORT VoodooI2CHIDDevice : public IOHIDDevice {
++    // <local> glitch guard (report 4 of the Goodix GXTP5100): the high byte of a coordinate is now and then read as 0, for
++    // one report. A finger cannot move > 600 of 4149 x 2147 units in one 6 ms frame: such a frame is read again, and dropped
++    // when still bad. Boot-arg -vi2c-no-glitch-guard turns it off.
++    bool gl_seen[16] = {false};
++    UInt16 gl_x[16] = {0}, gl_y[16] = {0};
++    UInt32 gl_bad = 0, gl_fixed = 0, gl_dropped = 0;
++    UInt32 gl_consec = 0;
++    UInt32 gl_votes = 0, gl_vote_mis = 0, gl_vote_fixed = 0, gl_vote_dropped = 0, gl_vote_adv = 0;
++    UInt16 gl_last_scan = 0;
++    bool gl_have_scan = false;
++    UInt32 gl_step = 160, gl_genuine = 0;   // step (raw units, pad 4149 x 2147) above which a frame is read again
++    bool glitchSimilar(const UInt8* a, const UInt8* b);
++    bool glitchSuspicious(const UInt8* r, UInt32 size);
++    void glitchAccept(const UInt8* r, UInt32 size);
++
+   OSDeclareDefaultStructors(VoodooI2CHIDDevice);
+ 
+  public:
+diff --git a/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.cpp b/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.cpp
+index de0099d..e15dfe8 100644
+--- a/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.cpp
++++ b/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.cpp
+@@ -12,6 +12,7 @@
+ #include <IOKit/usb/USBSpec.h>
+ #include <IOKit/bluetooth/BluetoothAssignedNumbers.h>
+ #include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
+ 
+ #define GetReportType(type)                                             \
+ ((type <= kIOHIDElementTypeInput_ScanCodes) ? kIOHIDReportTypeInput :   \
+@@ -84,7 +85,25 @@ const char* VoodooI2CMultitouchHIDEventDriver::getProductName() {
+     return "Multitouch HID Device";
+ }
+ 
++// <local> Reports can reach this handler from more than one thread (the poll that delivered one, and the next one that
++// arrives while it still runs, which happens when the machine is busy). Each run rewrites the shared transducers from the
++// HID element values, which the next report's parsing rewrites at the same time: the coordinates then lose a byte for one
++// report and the cursor flies to the edge and back. One at a time; ioreg "Overlaps" counts how often a second one arrived
++// while another was running.
+ void VoodooI2CMultitouchHIDEventDriver::handleInterruptReport(AbsoluteTime timestamp, IOMemoryDescriptor* report, IOHIDReportType report_type, UInt32 report_id) {
++    if (__atomic_fetch_add(&hid_busy, 1, __ATOMIC_SEQ_CST) > 0) {
++        hid_overlaps++;
++        setProperty("Overlaps", hid_overlaps, 32);
++    }
++    if (hid_lock)
++        IOLockLock(hid_lock);
++    handleInterruptReportInner(timestamp, report, report_type, report_id);
++    if (hid_lock)
++        IOLockUnlock(hid_lock);
++    __atomic_fetch_sub(&hid_busy, 1, __ATOMIC_SEQ_CST);
++}
++
++void VoodooI2CMultitouchHIDEventDriver::handleInterruptReportInner(AbsoluteTime timestamp, IOMemoryDescriptor* report, IOHIDReportType report_type, UInt32 report_id) {
+     // Touchpad is disabled through ApplePS2Keyboard request
+     if (ignore_all)
+         return;
+@@ -94,8 +113,21 @@ void VoodooI2CMultitouchHIDEventDriver::handleInterruptReport(AbsoluteTime times
+     uint64_t now_ns;
+     absolutetime_to_nanoseconds(now_abs, &now_ns);
+     
+-    if (report_type == kIOHIDReportTypeInput && readyForReports())
+-        clock_get_uptime(&last_multi_touch_event);
++    // <local> last_multi_touch_event drives the poll rate (VoodooI2CHIDDevice::simulateInterrupt: 2 ms while touched, 50 ms
++    // after 1.5 s of nothing). The Goodix GXTP5100 keeps answering a poll with its LAST report (same scan time, same bytes)
++    // when nobody touches it, so every poll counted as activity and the idle rate was never reached: ~180 reads/s forever,
++    // ~7,600 I2C0 interrupts/s on CPU 0. Only a report with a new scan time counts. Boot-arg -vi2c-keep-dups restores it.
++    if (report_type == kIOHIDReportTypeInput && readyForReports()) {
++        bool fresh = true;
++        if (report_id == 4 && report && report->getLength() >= 40 && !dup_off) {
++            UInt8 e[40];
++            report->readBytes(0, e, 40);
++            if (tr_frames > 0 && (UInt16)(e[36] | (e[37] << 8)) == tr_scan && memcmp(e, tr_prev, 40) == 0)
++                fresh = false;
++        }
++        if (fresh)
++            clock_get_uptime(&last_multi_touch_event);
++    }
+     
+     // Ignore touchpad interaction(s) shortly after typing
+     if (now_ns - key_time < max_after_typing)
+@@ -104,6 +136,42 @@ void VoodooI2CMultitouchHIDEventDriver::handleInterruptReport(AbsoluteTime times
+     if (!readyForReports() || report_type != kIOHIDReportTypeInput)
+         return;
+ 
++    // <local> ThinkBook 14+ 2024, Goodix GXTP5100, polled (no GPIO interrupt): some frames say "0 contacts" but carry a
++    // finger with its tip switch set and X = Y = 0. Forwarded, the cursor flies to the pad's corner and back. A frame
++    // with 0 contacts cannot have a finger down: drop it. The first 8 are kept in ioreg ("BogusFrame0".."7", raw bytes)
++    // with the running count in "BogusFrames". Set the boot-arg -vi2c-keep-bogus to forward them as before. </local>
++    if (digitiser.contact_count && digitiser.contact_count->getValue() == 0 && digitiser.fingers && !bogus_off) {
++        bool tip_down = false;
++        for (unsigned i = 0; i < digitiser.fingers->getCount() && !tip_down; i++) {
++            IOHIDElement* finger = OSDynamicCast(IOHIDElement, digitiser.fingers->getObject(i));
++            OSArray* kids = finger ? finger->getChildElements() : NULL;
++            for (unsigned j = 0; kids && j < kids->getCount(); j++) {
++                IOHIDElement* e = OSDynamicCast(IOHIDElement, kids->getObject(j));
++                if (e && e->getUsagePage() == kHIDPage_Digitizer && e->getReportID() == report_id &&
++                    (e->getUsage() == kHIDUsage_Dig_TipSwitch || e->getUsage() == kHIDUsage_Dig_Touch) && e->getValue()) {
++                    tip_down = true;
++                    break;
++                }
++            }
++        }
++        if (tip_down) {
++            if (bogus_frames < 8 && report) {
++                UInt8 raw[40];
++                UInt32 n = (UInt32)report->getLength();
++                if (n > sizeof(raw)) n = sizeof(raw);
++                report->readBytes(0, raw, n);
++                char hex[sizeof(raw) * 3 + 1];
++                for (UInt32 k = 0; k < n; k++) snprintf(hex + k * 3, 4, "%02x ", raw[k]);
++                char key[16];
++                snprintf(key, sizeof(key), "BogusFrame%u", bogus_frames);
++                setProperty(key, hex);
++            }
++            bogus_frames++;
++            setProperty("BogusFrames", bogus_frames, 32);
++            return;
++        }
++    }
++
+     if (digitiser.contact_count && digitiser.contact_count->getValue()) {
+         digitiser.current_contact_count = digitiser.contact_count->getValue();
+         
+@@ -115,14 +183,171 @@ void VoodooI2CMultitouchHIDEventDriver::handleInterruptReport(AbsoluteTime times
+         digitiser.current_report = 1;
+     }
+ 
++    // <local> raw stream, report 4 (40 bytes): ID, 5 x {flags(bit0 conf, bit1 tip, bits4-7 id), X u16, Y u16, pressure u16},
++    // scan time u16 (100 us), contact count u8, button u8. Records jumps of a contact between two reports (> 600), scan
++    // time going backwards or repeating (a stale or torn read), and count != fingers down.
++    if (report && report->getLength() >= 40) {
++        UInt8 b[40];
++        report->readBytes(0, b, 40);
++        if (b[0] == 4) {
++            tr_frames++;
++            int tips = 0;
++            UInt16 scan = b[36] | (b[37] << 8);
++            bool jumped = false;
++            for (int f = 0; f < 5; f++) {
++                const UInt8* q = b + 1 + f * 7;
++                int id = q[0] >> 4, tip = (q[0] >> 1) & 1;
++                UInt16 x = q[1] | (q[2] << 8), y = q[3] | (q[4] << 8);
++                if (!tip) continue;
++                tips++;
++                if (tr_seen[id]) {
++                    int dx = x > tr_x[id] ? x - tr_x[id] : tr_x[id] - x, dy = y > tr_y[id] ? y - tr_y[id] : tr_y[id] - y;
++                    if ((dx > dy ? dx : dy) > 600) jumped = true;
++                }
++                tr_seen[id] = true; tr_x[id] = x; tr_y[id] = y;
++            }
++            if (tips == 0) memset(tr_seen, 0, sizeof(tr_seen));
++            if (tips > 1) tr_multi++;
++            if (tips != b[38]) tr_mismatch++;
++            SInt16 dscan = (SInt16)(scan - tr_scan);
++            bool back = tr_frames > 1 && dscan < 0, same = tr_frames > 1 && dscan == 0;
++            if (back) tr_back++;
++            if (same) tr_same++;
++            if (jumped) tr_raw_jumps++;
++            if ((jumped && tr_jump_logged < 6) || (back && tr_back_logged < 6)) {
++                char hx[130], key[24];
++                for (int k = 0; k < 40; k++) snprintf(hx + k * 3, 4, "%02x ", tr_prev[k]);
++                snprintf(key, sizeof(key), "Ev%02uPrev", tr_jump_logged + tr_back_logged); setProperty(key, hx);
++                for (int k = 0; k < 40; k++) snprintf(hx + k * 3, 4, "%02x ", b[k]);
++                snprintf(key, sizeof(key), "Ev%02uCur%s", tr_jump_logged + tr_back_logged, jumped ? "Jump" : "Back"); setProperty(key, hx);
++                if (jumped) tr_jump_logged++; else tr_back_logged++;
++            }
++            // <local> polled faster than the pad scans: an exact repeat of the last report (same scan time, same bytes) is
++            // not a new touch event; macOS gets its timing from the events, so repeats upset its speed estimate.
++            // Boot-arg -vi2c-keep-dups forwards them as before.
++            bool dup = tr_frames > 1 && scan == tr_scan && memcmp(b, tr_prev, 40) == 0;
++            tr_scan = scan;
++            memcpy(tr_prev, b, 40);
++            if (dup && !dup_off) {
++                tr_dups++;
++                if ((tr_dups & 63) == 0) setProperty("DupDropped", tr_dups, 32);
++                return;
++            }
++            // <local> device clock: the pad stamps every frame (scan time, 100 us units). Events handed to macOS get
++            // poll-time + jitter otherwise (a frame is noticed 0-2 ms late); macOS derives finger speed from the gaps.
++            // tr_dev_ns follows the pad's own spacing, never later than the poll time. Boot-arg -vi2c-raw-ts keeps poll time.
++            {
++                uint64_t poll_ns; absolutetime_to_nanoseconds(timestamp, &poll_ns);
++                if (!tr_dev_valid) tr_dev_ns = poll_ns;
++                else {
++                    uint64_t d = (uint64_t)(UInt16)(scan - tr_scan_nd) * 100000ULL;
++                    if (d == 0 || d > 40000000ULL) tr_dev_ns = poll_ns;       // repeat, gap or new touch: resync
++                    else tr_dev_ns += d;
++                    if (tr_dev_ns > poll_ns) tr_dev_ns = poll_ns;
++                    if (poll_ns - tr_dev_ns > 25000000ULL) tr_dev_ns = poll_ns;
++                }
++                tr_scan_nd = scan; tr_dev_valid = true;
++                nanoseconds_to_absolutetime(tr_dev_ns, &tr_fwd_ts);
++                tr_fwd_ts_ok = true;
++            }
++            if ((tr_frames & 63) == 0) {
++                setProperty("Frames", tr_frames, 32); setProperty("MultiTipFrames", tr_multi, 32);
++                setProperty("RawJumps", tr_raw_jumps, 32); setProperty("ScanBackwards", tr_back, 32);
++                setProperty("ScanSame", tr_same, 32); setProperty("CountMismatch", tr_mismatch, 32);
++            }
++        }
++    }
++
+     handleDigitizerReport(timestamp, report_id);
+ 
++    // <local> the element values are sometimes wrong: the high byte of X or Y is missing for one report (X = 66 where the
++    // report says 1345), which sends the cursor to the edge and back. The report in hand is right, so the finger
++    // coordinates are taken from its bytes (report 4: ID, 5 x {flags, X u16, Y u16, pressure u16}). Boot-arg
++    // -vi2c-no-elem-fix turns it off; ioreg: ElemFixed, ElemFix<n> (raw vs element).
++    if (report_id == 4 && report && report->getLength() >= 40 && digitiser.transducers && !elem_fix_off) {
++        UInt8 rb[40];
++        report->readBytes(0, rb, 40);
++        if (rb[0] == 4) {
++            for (int f = 0; f < 5; f++) {
++                const UInt8* q = rb + 1 + f * 7;
++                if (!((q[0] >> 1) & 1)) continue;
++                VoodooI2CDigitiserTransducer* tr = OSDynamicCast(VoodooI2CDigitiserTransducer, digitiser.transducers->getObject(f));
++                if (!tr) continue;
++                UInt16 rx = q[1] | (q[2] << 8), ry = q[3] | (q[4] << 8);
++                UInt16 ex = tr->coordinates.x.value(), ey = tr->coordinates.y.value();
++                if (ex != rx || ey != ry) {
++                    if (elem_fixed < 6) {
++                        char v[100], key[16];
++                        snprintf(v, sizeof(v), "slot %d element (%u,%u) report (%u,%u)", f, ex, ey, rx, ry);
++                        snprintf(key, sizeof(key), "ElemFix%u", elem_fixed);
++                        setProperty(key, v);
++                    }
++                    elem_fixed++;
++                    setProperty("ElemFixed", elem_fixed, 32);
++                    tr->coordinates.x.current.value = rx;
++                    tr->coordinates.y.current.value = ry;
++                }
++            }
++        }
++    }
++
+     if (digitiser.current_report == digitiser.report_count) {
+         VoodooI2CMultitouchEvent event;
+         event.contact_count = digitiser.current_contact_count;
+         event.transducers = digitiser.transducers;
+ 
+-        forwardReport(event, timestamp);
++        // <local> timing of what is handed on: gap since the previous forwarded event, histogram (us): <500 <1000 <2000 <3000 <5000 <8000 <12000 more
++        {
++            uint64_t ns; absolutetime_to_nanoseconds((tr_fwd_ts_ok && !ts_off) ? tr_fwd_ts : timestamp, &ns);
++            uint64_t pns; absolutetime_to_nanoseconds(timestamp, &pns);
++            if (tr_last_poll_ns) {
++                uint64_t pus = (pns - tr_last_poll_ns) / 1000;
++                tr_poll_hist[pus < 3000 ? 0 : pus < 5000 ? 1 : pus < 7000 ? 2 : pus < 9000 ? 3 : 4]++;
++            }
++            tr_last_poll_ns = pns;
++            if (tr_last_fwd_ns) {
++                uint64_t us = (ns - tr_last_fwd_ns) / 1000;
++                int h = us < 500 ? 0 : us < 1000 ? 1 : us < 2000 ? 2 : us < 3000 ? 3 : us < 5000 ? 4 : us < 8000 ? 5 : us < 12000 ? 6 : 7;
++                tr_dt_hist[h]++;
++                if (us / 1000 == 0) tr_same_ms++;
++                if ((tr_dt_hist[0] + tr_dt_hist[1] + tr_dt_hist[2] + tr_dt_hist[3] + tr_dt_hist[4] + tr_dt_hist[5] + tr_dt_hist[6] + tr_dt_hist[7]) % 32 == 0) {
++                    char v[200];
++                    snprintf(v, sizeof(v), "%u %u %u %u %u %u %u %u  same-ms %u | poll gaps <3 <5 <7 <9 more: %u %u %u %u %u", tr_dt_hist[0], tr_dt_hist[1], tr_dt_hist[2], tr_dt_hist[3], tr_dt_hist[4], tr_dt_hist[5], tr_dt_hist[6], tr_dt_hist[7], tr_same_ms, tr_poll_hist[0], tr_poll_hist[1], tr_poll_hist[2], tr_poll_hist[3], tr_poll_hist[4]);
++                    setProperty("FwdGapHist", v);
++                }
++            }
++            tr_last_fwd_ns = ns;
++        }
++
++        // <local> what is handed on: jumps in the forwarded positions
++        if (event.transducers) {
++            bool any_fwd = false;
++            for (unsigned i = 0; i < event.transducers->getCount(); i++) {
++                VoodooI2CDigitiserTransducer* tr = OSDynamicCast(VoodooI2CDigitiserTransducer, event.transducers->getObject(i));
++                if (!tr) continue;
++                int id = tr->secondary_id & 15;
++                if (!tr->tip_switch.value()) continue;
++                any_fwd = true;
++                UInt16 x = tr->coordinates.x.value(), y = tr->coordinates.y.value();
++                if (tr_fseen[id]) {
++                    int dx = x > tr_fx[id] ? x - tr_fx[id] : tr_fx[id] - x, dy = y > tr_fy[id] ? y - tr_fy[id] : tr_fy[id] - y;
++                    if ((dx > dy ? dx : dy) > 600) {
++                        if (tr_fwd_jumps < 8) {
++                            char v[120], key[24];
++                            snprintf(v, sizeof(v), "id %d (%u,%u) -> (%u,%u) contacts %u report %u/%u", id, tr_fx[id], tr_fy[id], x, y,
++                                     (unsigned)event.contact_count, (unsigned)digitiser.current_report, (unsigned)digitiser.report_count);
++                            snprintf(key, sizeof(key), "FwdJump%u", tr_fwd_jumps); setProperty(key, v);
++                        }
++                        tr_fwd_jumps++;
++                        setProperty("FwdJumps", tr_fwd_jumps, 32);
++                    }
++                }
++                tr_fseen[id] = true; tr_fx[id] = x; tr_fy[id] = y;
++            }
++            if (!any_fwd) memset(tr_fseen, 0, sizeof(tr_fseen));
++        }
++
++        forwardReport(event, (tr_fwd_ts_ok && !ts_off) ? tr_fwd_ts : timestamp);
+         
+         digitiser.report_count = 1;
+         digitiser.current_report = 1;
+@@ -467,6 +692,7 @@ bool VoodooI2CMultitouchHIDEventDriver::handleStart(IOService* provider) {
+ }
+ 
+ void VoodooI2CMultitouchHIDEventDriver::handleStop(IOService* provider) {
++    if (hid_lock) { IOLockLock(hid_lock); IOLock* l = hid_lock; hid_lock = NULL; IOLockUnlock(l); IOLockFree(l); }   // <local>
+     unregisterHIDPointerNotifications();
+     OSSafeReleaseNULL(attached_hid_pointer_devices);
+     
+@@ -793,6 +1019,11 @@ IOReturn VoodooI2CMultitouchHIDEventDriver::setPowerState(unsigned long whichSta
+ }
+ 
+ bool VoodooI2CMultitouchHIDEventDriver::start(IOService* provider) {
++    hid_lock = IOLockAlloc();   // <local>
++    { char arg[8]; bogus_off = PE_parse_boot_argn("-vi2c-keep-bogus", arg, sizeof(arg)); }   // <local>
++    { char arg[8]; dup_off = PE_parse_boot_argn("-vi2c-keep-dups", arg, sizeof(arg)); }   // <local>
++    { char arg[8]; ts_off = PE_parse_boot_argn("-vi2c-raw-ts", arg, sizeof(arg)); }   // <local>
++    { char arg[8]; elem_fix_off = PE_parse_boot_argn("-vi2c-no-elem-fix", arg, sizeof(arg)); }   // <local>
+     if (!super::start(provider))
+         return false;
+     
+diff --git a/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.hpp b/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.hpp
+index 60b9558..7bd9182 100644
+--- a/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.hpp
++++ b/VoodooI2CHID/VoodooI2CMultitouchHIDEventDriver.hpp
+@@ -62,6 +62,34 @@ enum {
+ class EXPORT VoodooI2CMultitouchHIDEventDriver : public IOHIDEventService {
+   OSDeclareDefaultStructors(VoodooI2CMultitouchHIDEventDriver);
+ 
++    UInt32 bogus_frames = 0;    // <local> frames with 0 contacts but a finger down, dropped (see handleInterruptReport)
++    bool bogus_off = false;     // <local> boot-arg -vi2c-keep-bogus
++    bool dup_off = false;       // <local> boot-arg -vi2c-keep-dups
++    UInt32 tr_dups = 0;
++    uint64_t tr_last_fwd_ns = 0;
++    UInt32 tr_dt_hist[8] = {0};
++    UInt32 tr_same_ms = 0;
++    bool ts_off = false;        // <local> boot-arg -vi2c-raw-ts
++    bool elem_fix_off = false;  // <local> boot-arg -vi2c-no-elem-fix
++    IOLock* hid_lock = NULL;    // <local> one report at a time
++    volatile SInt32 hid_busy = 0;
++    UInt32 hid_overlaps = 0;
++    void handleInterruptReportInner(AbsoluteTime timestamp, IOMemoryDescriptor* report, IOHIDReportType report_type, UInt32 report_id);
++    UInt32 elem_fixed = 0;
++    bool tr_dev_valid = false, tr_fwd_ts_ok = false;
++    uint64_t tr_dev_ns = 0, tr_last_poll_ns = 0;
++    UInt16 tr_scan_nd = 0;
++    AbsoluteTime tr_fwd_ts = 0;
++    UInt32 tr_poll_hist[5] = {0};
++    // <local> jump tracing (ioreg: Frames, RawJumps, FwdJumps, MultiTipFrames, RawJump<n>Prev/Cur, FwdJump<n>)
++    UInt32 tr_frames = 0, tr_raw_jumps = 0, tr_fwd_jumps = 0, tr_multi = 0;
++    UInt16 tr_x[16] = {0}, tr_y[16] = {0}, tr_fx[16] = {0}, tr_fy[16] = {0};
++    bool tr_seen[16] = {false}, tr_fseen[16] = {false};
++    UInt8 tr_prev[40] = {0};
++    UInt16 tr_scan = 0;
++    UInt32 tr_back = 0, tr_same = 0, tr_mismatch = 0, tr_jump_logged = 0, tr_back_logged = 0;
++    uint64_t tr_prev_ns = 0;
++
+  public:
+     struct Digitiser {
+         OSArray*           fingers = NULL;
