@@ -162,3 +162,21 @@ XeGfx release does. This phase is about compositing on the GPU, not the refresh 
 Undo:  sudo bash /Volumes/PKG/metal-stack/desktop/uninstall-desktop.sh                then restart
        from Recovery: bash /Volumes/PKG/metal-stack/desktop/uninstall-desktop.sh "/Volumes/MAC - Data"
 Reports land in /Volumes/PKG/metal-stack/desktop/reports.
+
+Panel brightness 2026-11-17 (the system slider changes the panel; it shows as the built-in display)
+  The firmware leaves the eDP backlight on the south display PWM, controller 0 (BXT_BLC_PWM_CTL 0xc8250 enabled, FREQ
+  0xc8254 = 192000, DUTY 0xc8258, at 100%); nothing in macOS drove it, and the panel was an AppleDisplay.
+  - brightness/add-pnlf.sh apply: SSDT-PNLF in the EFI. IOFramebuffer decides once, when WindowServer first opens a
+    framebuffer, whether there is a service named "backlight"; WindowServer starts before XeGfxIntelFB, so it must be ACPI.
+  - XeGfxIntelFB 0.9.7 (xeintelfb/bootvram.patch, 8-xeintelfb.sh, desktop/install-xeintelfb.sh): kIOConnectionBuiltIn and
+    getAppleSense kPanelTFTConnect, so AppleBacklightDisplay matches; XeGfxBacklight, an IODisplayParameterHandler on
+    PNLF's APP0002, gives the display its brightness keys and writes DUTY (0-1024 -> 1-100%). The slider arrives as
+    brightness-probe; CoreBrightness keeps writing linear-brightness = 65536, which is ignored (otherwise every move
+    snaps back to 100%). Boot-arg -xeintelfbnobl turns it off.
+  - desktop/brightkeys/install.sh: Control-Option-Up/Down through DisplayServices (the slider's API), no permission.
+  - Also: XeGfxAccel 0.9.6 (xeflip/backlight.patch) debug.nvaccel_backlight and desktop/brightness.sh write the PWM
+    directly (bypass the slider); desktop/backlight-peek.py reads the registers.
+  Not working: the keyboard's own brightness keys (EC _Q11/_Q12 notifies never reach macOS).
+  Every install script's kmutil create now also takes --repository /Library/Apple/System/Library/Extensions: without it
+  Apple's RemoteVirtualInterface (com.apple.nke.rvi) fell out of the auxiliary collection and update-kext.sh stopped.
+

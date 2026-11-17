@@ -7,7 +7,7 @@ Patches modify upstream WTLIntelGfx (https://github.com/watchthelight-labs/WTLIn
 and keep the licence of the code they change:
 
   metal-stack/xeflip/xeflip.patch, metal-stack/xeflip/gpufb.patch, metal-stack/xeflip/wsmark.patch,
-  metal-stack/xeflip/wtl-worktree.patch (also kexts/XeGfxAGDC and plugin/)
+  metal-stack/xeflip/backlight.patch, metal-stack/xeflip/wtl-worktree.patch (also kexts/XeGfxAGDC and plugin/)
       change kexts/XeGfxAccel (a fork of NullMoth Systems' nvidia-macos-driver), which is under the PolyForm
       Noncommercial License 1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/). These patches are
       shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.

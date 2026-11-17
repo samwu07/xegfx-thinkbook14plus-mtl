@@ -54,7 +54,10 @@ find "$EXT/$NAME.kext.new" -name '._*' -delete
 chown -R root:wheel "$EXT/$NAME.kext.new"; chmod -R 755 "$EXT/$NAME.kext.new"
 rm -rf "$EXT/$NAME.kext"; mv "$EXT/$NAME.kext.new" "$EXT/$NAME.kext"; SWAPPED=1
 NEW="$KC.$TAG-new"; rm -f "$NEW"
-if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" --repository "$EXT" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
+# Apple's own auxiliary kexts (RemoteVirtualInterface from Xcode/MobileDevice, 2026-11-17) live in /Library/Apple: without
+# that repository they drop out of the collection and the check below stops the update
+REPOS=(--repository "$EXT"); [ -d /Library/Apple/System/Library/Extensions ] && REPOS+=(--repository /Library/Apple/System/Library/Extensions)
+if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" "${REPOS[@]}" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
   grep -i -E 'error|unresolved|symbol' "$REPORT/kmutil.log" | head -20 || true   # no match must not end the script before die
   die "the collection did not link (log in $REPORT/kmutil.log)"
 fi

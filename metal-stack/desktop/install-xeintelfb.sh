@@ -70,7 +70,8 @@ else
   SWAPPED=1; rm -rf "$EXT/XeGfxIntelFB.kext"
 fi
 NEW="$KC.xeintelfb-new"; rm -f "$NEW"
-if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" --repository "$EXT" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
+REPOS=(--repository "$EXT"); [ -d /Library/Apple/System/Library/Extensions ] && REPOS+=(--repository /Library/Apple/System/Library/Extensions)   # Apple's own aux kexts (RemoteVirtualInterface)
+if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" "${REPOS[@]}" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
   grep -i -E 'error|unresolved|symbol' "$REPORT/kmutil.log" | head -20 || true   # no match must not end the script before die
   die "the collection did not link (log in $REPORT/kmutil.log)"
 fi

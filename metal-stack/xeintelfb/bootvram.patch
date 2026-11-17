@@ -1,6 +1,15 @@
---- a/kexts/XeGfxIntelFB/intelfb.cpp	2026-11-03 16:42:08
-+++ b/kexts/XeGfxIntelFB/intelfb.cpp	2026-11-03 16:42:09
-@@ -14,6 +14,7 @@
+--- a/kexts/XeGfxIntelFB/intelfb.cpp
++++ b/kexts/XeGfxIntelFB/intelfb.cpp
+@@ -3,6 +3,8 @@
+ // for WindowServer (I-108). Lives in the AuxKC because IONDRVSupport is in the system collection.
+ // <wtl> fork: nvgfx | author: watchthelight </wtl>
+ #include <IOKit/ndrvsupport/IONDRVFramebuffer.h>
++#include <IOKit/ndrvsupport/IOMacOSVideo.h>
++#include <IOKit/graphics/IODisplay.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
+ #include <libkern/c++/OSData.h>
+@@ -14,6 +16,7 @@
  #include <kern/clock.h>
  #include <IOKit/IOBufferMemoryDescriptor.h>
  #include <IOKit/IOLocks.h>
@@ -8,7 +17,7 @@
  
  #define XIFBLOG(fmt, ...) IOLog("XeGfxIntelFB: " fmt "\n", ##__VA_ARGS__)
  
-@@ -62,7 +63,7 @@
+@@ -62,7 +65,7 @@
  // kmutil places a kext in a kernel collection only with a _kmod_info symbol (Xcode generates it; this build does not)
  #include <mach/kmod.h>
  extern "C" kern_return_t _start(kmod_info_t *ki, void *d); extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
@@ -17,7 +26,7 @@
  extern "C" kern_return_t _start(kmod_info_t *ki, void *d) { return KERN_SUCCESS; }
  extern "C" kern_return_t _stop(kmod_info_t *ki, void *d)  { return KERN_SUCCESS; }
  
-@@ -139,6 +140,26 @@
+@@ -139,6 +142,26 @@
      return ns ? (uint32_t)(((uint64_t)frames << 16) * 1000000000ull / ns) : 0;
  }
  // the EDID detailed timing nearest the measured rate, so the reported refresh is the panel's exact one
@@ -44,7 +53,7 @@
  static uint32_t xifbSnapHz(const uint8_t *e, int len, uint32_t meas)
  {
      uint32_t best = meas, bd = ~0u;
-@@ -155,7 +176,40 @@
+@@ -155,7 +178,40 @@
      return (meas && bd > meas / 50) ? meas : best;    // more than 2 % off: keep the measurement
  }
  
@@ -85,11 +94,59 @@
  // Hardware cursor on pipe A's cursor plane. Without one IOFramebuffer draws a software cursor, every move damages a
  // rect around it, and WindowServer recomposites blurred window backdrops there (the I-119 square).
  // The GOP maps a 16 MB GGTT block at 0xff000000 for its 16,384,000-byte framebuffer; the 96 pages after it lie in
-@@ -324,8 +378,92 @@
+@@ -171,6 +227,43 @@
+ #define XIFB_CUR_BUF   0x7017c
+ #define XIFB_P1_BUF    0x7027c
+ #define XIFB_P1_SURF   0x7019c
++
++// <backlight> Native brightness (2026-11-17). The firmware leaves the eDP backlight on the south display PWM, controller 0
++// (BXT_BLC_PWM_CTL 0xc8250 enabled, FREQ 0xc8254, DUTY 0xc8258; Broxton layout on display version 14), and nothing in
++// macOS drove it: the panel was an AppleDisplay with no brightness. IOGraphics needs three things for the built-in panel
++// and its slider: a service named "backlight" before the first framebuffer opens (SSDT-PNLF, _CID "backlight"); the
++// framebuffer reporting a built-in TFT panel (kConnectionFlags + getAppleSense, so AppleBacklightDisplay matches); and an
++// IODisplayParameterHandler under that backlight service, which IODisplay adds and which owns "brightness". Here the
++// framebuffer publishes its register window and XeGfxBacklight (below, on PNLF's APP0002) writes DUTY. Brightness
++// 0-1024 maps to 1-100% of the PWM period, so the panel never goes black. Boot-arg -xeintelfbnobl turns all of it off.
++#define XIFB_BL_CTL  0xc8250
++#define XIFB_BL_FREQ 0xc8254
++#define XIFB_BL_DUTY 0xc8258
++#define XIFB_BL_MAX  1024
++#define XIFB_BL_LMAX 65536   // the linear keys' range, as on Intel MacBooks
++static volatile uint32_t *gBlRegs;   // set by the framebuffer once its BAR 0 is mapped
++static bool xifbBlOff() { int off = 0; return PE_parse_boot_argn("-xeintelfbnobl", &off, sizeof off); }
++static uint32_t xifbBlFreq()         // the PWM period, 0 when the controller is off or not reachable
++{
++    if (!gBlRegs || !(gBlRegs[XIFB_BL_CTL / 4] & 0x80000000u)) return 0;
++    return gBlRegs[XIFB_BL_FREQ / 4];
++}
++static int xifbBlGet()
++{
++    const uint32_t f = xifbBlFreq();
++    if (!f) return -1;
++    const uint64_t pm = (uint64_t)gBlRegs[XIFB_BL_DUTY / 4] * 1000 / f;   // per mille
++    return pm <= 10 ? 0 : pm >= 1000 ? XIFB_BL_MAX : (int)((pm - 10) * XIFB_BL_MAX / 990);
++}
++static bool xifbBlSet(uint32_t v)
++{
++    const uint32_t f = xifbBlFreq();
++    if (!f) return false;
++    if (v > XIFB_BL_MAX) v = XIFB_BL_MAX;
++    gBlRegs[XIFB_BL_DUTY / 4] = (uint32_t)((uint64_t)f * (10 + (uint64_t)v * 990 / XIFB_BL_MAX) / 1000);
++    return true;
++}
++// </backlight>
+ 
+ class XeGfxIntelFramebuffer : public IONDRVFramebuffer {
+     OSDeclareDefaultStructors(XeGfxIntelFramebuffer)
+@@ -324,8 +417,96 @@
                  }
          }
          if (!curSetup()) fCurReady = false;
 -        return IONDRVFramebuffer::start(provider);
++        if (fR && !xifbBlOff()) {   // <backlight>
++            gBlRegs = fR;
++            XIFBLOG("backlight: PWM %s, period %u, brightness %d of %d", xifbBlFreq() ? "on" : "OFF", xifbBlFreq(), xifbBlGet(), XIFB_BL_MAX);
++        }
 +        bool vram = OSDynamicCast(IOPCIDevice, provider) && xifbAddConsoleRange(provider);
 +        bool ok = IONDRVFramebuffer::start(provider);
 +        // the name is still the class name here; it becomes ".Display_boot" when the boot NDRV opens it
@@ -179,3 +236,99 @@
      bool hasDDCConnect(IOIndex ci) override { return fEdidLen ? true : IONDRVFramebuffer::hasDDCConnect(ci); }
      IOReturn getDDCBlock(IOIndex ci, UInt32 block, IOSelect type, IOOptionBits opt, UInt8 *data, IOByteCount *len) override {
          if (!fEdidLen) return IONDRVFramebuffer::getDDCBlock(ci, block, type, opt, data, len);
+@@ -335,8 +516,23 @@
+     }
+     IOReturn getAttributeForConnection(IOIndex ci, IOSelect attr, uintptr_t *value) override {
+         if (fEdidLen && attr == kConnectionSupportsHLDDCSense) return kIOReturnSuccess;
+-        return IONDRVFramebuffer::getAttributeForConnection(ci, attr, value);
++        IOReturn r = IONDRVFramebuffer::getAttributeForConnection(ci, attr, value);
++        // <backlight> the panel is the built-in display (AppleBacklightDisplay looks for this flag)
++        if (attr == kConnectionFlags && value && xifbBlFreq()) {
++            if (r != kIOReturnSuccess) { *value = 0; r = kIOReturnSuccess; }
++            *value |= kIOConnectionBuiltIn;
++        }
++        return r;
+     }
++    // <backlight> and a TFT panel, the other half of AppleBacklightDisplay's probe
++    IOReturn getAppleSense(IOIndex ci, UInt32 *senseType, UInt32 *primary, UInt32 *extended, UInt32 *displayType) override {
++        if (!xifbBlFreq()) return IONDRVFramebuffer::getAppleSense(ci, senseType, primary, extended, displayType);
++        if (senseType) *senseType = 0;
++        if (primary) *primary = 0;
++        if (extended) *extended = 0;
++        if (displayType) *displayType = kPanelTFTConnect;
++        return kIOReturnSuccess;
++    }
+     // the panel's size and refresh, and ValidForHiRes so the 2x sizes reach Displays settings (I-059 on NVRMFB)
+     IOReturn getInformationForDisplayMode(IODisplayModeID mode, IODisplayModeInformation *info) override {
+         IOReturn r = IONDRVFramebuffer::getInformationForDisplayMode(mode, info);
+@@ -349,3 +545,70 @@
+ };
+ 
+ OSDefineMetaClassAndStructors(XeGfxIntelFramebuffer, IONDRVFramebuffer)
++
++// <backlight> The brightness parameter of the built-in panel's IODisplay. Matches the PNLF device (APP0002), so IODisplay
++// finds it under the "backlight" service; it serves only displays on XeGfxIntelFramebuffer.
++class XeGfxBacklight : public IODisplayParameterHandler {
++    OSDeclareDefaultStructors(XeGfxBacklight)
++    IODisplay *fDisplay = nullptr;
++public:
++    IOService *probe(IOService *provider, SInt32 *score) override {
++        return xifbBlOff() ? nullptr : IODisplayParameterHandler::probe(provider, score);
++    }
++    bool start(IOService *provider) override {
++        if (!IODisplayParameterHandler::start(provider)) return false;
++        registerService();
++        XIFBLOG("backlight: handler on %s", provider->getName());
++        return true;
++    }
++    bool setDisplay(IODisplay *display) override {
++        IODisplayConnect *c = display ? display->getConnection() : nullptr;
++        if (!c || !OSDynamicCast(XeGfxIntelFramebuffer, c->getFramebuffer())) return false;
++        const int cur = xifbBlGet();
++        if (cur < 0) { XIFBLOG("backlight: PWM not reachable, no brightness for %s", display->getName()); return false; }
++        OSObject *old = display->copyProperty(gIODisplayParametersKey);
++        OSDictionary *params = OSDynamicCast(OSDictionary, old) ? OSDictionary::withDictionary((OSDictionary *)old)
++                                                                : OSDictionary::withCapacity(2);
++        OSSafeReleaseNULL(old);
++        if (!params) return false;
++        IODisplay::addParameter(params, gIODisplayBrightnessKey, 0, XIFB_BL_MAX);
++        IODisplay::setParameter(params, gIODisplayBrightnessKey, cur);
++        // CoreBrightness drives the built-in panel through the linear keys, not "brightness" (2026-11-17: the slider moved,
++        // "brightness" stayed 1024 and nothing reached doIntegerSet). Same PWM behind all of them.
++        const SInt32 lin = (SInt32)((int64_t)cur * XIFB_BL_LMAX / XIFB_BL_MAX);
++        IODisplay::addParameter(params, gIODisplayLinearBrightnessKey, 0, XIFB_BL_LMAX);
++        IODisplay::setParameter(params, gIODisplayLinearBrightnessKey, lin);
++        IODisplay::addParameter(params, gIODisplayUsableLinearBrightnessKey, 0, XIFB_BL_LMAX);
++        IODisplay::setParameter(params, gIODisplayUsableLinearBrightnessKey, lin);
++        IODisplay::addParameter(params, gIODisplayBrightnessProbeKey, 0, XIFB_BL_MAX);
++        IODisplay::setParameter(params, gIODisplayBrightnessProbeKey, cur);
++        IODisplay::addParameter(params, gIODisplayLinearBrightnessProbeKey, 0, XIFB_BL_LMAX);
++        IODisplay::setParameter(params, gIODisplayLinearBrightnessProbeKey, lin);
++        display->setProperty(gIODisplayParametersKey, params);
++        params->release();
++        fDisplay = display;
++        XIFBLOG("backlight: brightness %d of %d on %s", cur, XIFB_BL_MAX, display->getName());
++        return true;
++    }
++    bool doIntegerSet(OSDictionary *params, const OSSymbol *name, UInt32 value) override {
++        uint32_t v;
++        if (name == gIODisplayBrightnessKey || name == gIODisplayBrightnessProbeKey) v = value;
++        else if (name == gIODisplayLinearBrightnessKey || name == gIODisplayUsableLinearBrightnessKey
++                 || name == gIODisplayLinearBrightnessProbeKey) {
++            // 0.9.6 log: the slider arrives as brightness-probe (526, 0, 174, 610 ...) while CoreBrightness keeps writing
++            // linear-brightness = 65536 (1000+ times), which put the panel back at 100% after every move. The linear keys
++            // are accepted and left alone; brightness-probe and brightness (fades, display sleep) drive the PWM.
++            static unsigned l; if (l++ < 6 || l % 1000 == 0) XIFBLOG("backlight: %s = %u kept, PWM unchanged [%u]", name->getCStringNoCopy(), (unsigned)value, l);
++            return true;
++        } else {
++            static unsigned m; if (m++ < 12) XIFBLOG("backlight: not ours: %s = %u", name ? name->getCStringNoCopy() : "?", (unsigned)value);
++            return false;
++        }
++        static unsigned n; if (n++ < 40 || n % 200 == 0) XIFBLOG("backlight: %s = %u -> %u of %d [%u]", name->getCStringNoCopy(), (unsigned)value, v, XIFB_BL_MAX, n);
++        return xifbBlSet(v);
++    }
++    bool doDataSet(const OSSymbol *name, OSData *value) override { return false; }
++    bool doUpdate() override { return true; }
++};
++OSDefineMetaClassAndStructors(XeGfxBacklight, IODisplayParameterHandler)
++// </backlight>

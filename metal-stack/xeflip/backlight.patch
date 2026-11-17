@@ -1,0 +1,41 @@
+diff -ru a/XeGfxAccel/accel/nvrm-accel.cpp b/XeGfxAccel/accel/nvrm-accel.cpp
+--- a/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-17 16:31:20
++++ b/XeGfxAccel/accel/nvrm-accel.cpp	2026-11-17 16:31:34
+@@ -1484,6 +1484,28 @@
+     return SYSCTL_OUT(req, v, sizeof v);
+ }
+ SYSCTL_PROC(_debug, OID_AUTO, nvaccel_mmio_win, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, nvaccel_mmio_win_sysctl, "S", "64 registers from mmio_addr");
++// <backlight> The panel's brightness (2026-11-17): the firmware leaves the eDP backlight on the south display PWM,
++// controller 0 (BXT_BLC_PWM_CTL 0xc8250 enabled, FREQ 0xc8254, DUTY 0xc8258), at 100%, and nothing in macOS drives it.
++// This is the only register the accelerator writes outside the GPU's own path: DUTY of controller 0, as per mille of
++// FREQ, and only while that controller is enabled. Reads give the current per mille. Never below 10 per mille (1%),
++// so a mistyped value cannot black the panel out. Any user may write it (a brightness shortcut needs no sudo).
++static int nvaccel_backlight_sysctl SYSCTL_HANDLER_ARGS
++{
++    if (!gXeMmio || gXeMmio->getLength() < 0xc9000) return ENOENT;
++    volatile uint32_t *r = (volatile uint32_t *)gXeMmio->getVirtualAddress();
++    const uint32_t ctl = r[0xc8250 / 4], freq = r[0xc8254 / 4];
++    if (!(ctl & 0x80000000u) || !freq) return ENODEV;
++    int pm = (int)((uint64_t)r[0xc8258 / 4] * 1000 / freq);
++    const int err = sysctl_handle_int(oidp, &pm, 0, req);
++    if (err || !req->newptr) return err;
++    if (pm < 10) pm = 10;
++    if (pm > 1000) pm = 1000;
++    r[0xc8258 / 4] = (uint32_t)((uint64_t)freq * (unsigned)pm / 1000);
++    return 0;
++}
++SYSCTL_PROC(_debug, OID_AUTO, nvaccel_backlight, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, 0, 0, nvaccel_backlight_sysctl, "I",
++            "panel brightness, per mille of the PWM period (10-1000)");
++// </backlight>
+ // I-119: the GOP maps the scanout buffer in the GGTT with PAT 0 (write-back); the display engine reads memory around
+ // that cache, so lines our copy keeps rewriting (around a moving cursor) reach the panel late. Writing 0-3 here moves
+ // the scanout's PTEs to that PAT index (1 = write-through, as i915 maps scanout); reading gives the first PTE's index.
+@@ -1567,7 +1589,7 @@
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_copy_us_max); sysctl_register_oid(&sysctl__debug_nvaccel_iop_vbl_wait_us);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_vbl_pipe);  sysctl_register_oid(&sysctl__debug_nvaccel_iop_vbl_hit);
+     sysctl_register_oid(&sysctl__debug_nvaccel_iop_vbl_miss);
+-    sysctl_register_oid(&sysctl__debug_nvaccel_mmio_addr);     sysctl_register_oid(&sysctl__debug_nvaccel_mmio_win); sysctl_register_oid(&sysctl__debug_nvaccel_fb_pat); sysctl_register_oid(&sysctl__debug_nvaccel_dpcd_addr); sysctl_register_oid(&sysctl__debug_nvaccel_dpcd);
++    sysctl_register_oid(&sysctl__debug_nvaccel_mmio_addr);     sysctl_register_oid(&sysctl__debug_nvaccel_mmio_win); sysctl_register_oid(&sysctl__debug_nvaccel_backlight); sysctl_register_oid(&sysctl__debug_nvaccel_fb_pat); sysctl_register_oid(&sysctl__debug_nvaccel_dpcd_addr); sysctl_register_oid(&sysctl__debug_nvaccel_dpcd);
+ }
+ static uint64_t nvXeUs(uint64_t t0) { uint64_t ns; absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns); return ns / 1000; }
+ // Waits (at most 25 ms) until the transcoder showing an h-line mode is in vblank. Read-only: TRANSCONF, TRANS_VTOTAL

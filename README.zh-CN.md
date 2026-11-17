@@ -21,6 +21,7 @@
 | 桌面被限制在约 30 帧/秒：WindowServer 以 30 Hz 的节拍合成 | XeGfxIntelFB 下面的启动 NDRV 没有 VBL 源。XeGfxIntelFB 0.9.4 注册了一个，由 pipe A 的帧计数器驱动（约 58 Hz；启动参数 `-xeintelfbnovbl` 可关闭）。另外，WindowServer 的完成标记改走加速器的 `XGDR` 连接，WindowServer 不再逐个等待合成完成（XeGfxAccel 0.9.4 及以后版本中的 `xeflip/wsmark.patch`，以及通过 `9-wsmark-plugin.sh` 应用的 `xeflip/wsmark-plugin.patch`；默认开启，`WSMARK=0` 关闭）。用 `desktop/fps-gaps` 测得：拖动窗口时约 58-60 帧/秒 |
 | 使用数小时后 WindowServer 崩溃（`nvmtl_buffer_sync_in` 中 SIGSEGV） | WindowServer 解除了一个仍在使用的 no-copy 缓冲区背后页面的映射；插件会复制只读的这类缓冲区，并从已失效的地址刷新，还会把结果写回只读页面。`xeflip/hostsync-plugin.patch` 在两次复制前都先检查页面（`9-wsmark-plugin.sh`；复现：`desktop/hostsync-test.sh`） |
 | 小组件圆角缺失、窗口背后的模糊（vibrancy）透明、出现异常色块 | 绘制读取自己的渲染目标时，纹理屏障没有刷新它读取的快照。[jxy333967](https://github.com/jxy333967) 的 `xeflip/renderfix-plugin.patch`（[issue #2](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2)）会刷新快照，并为带行距的只读 CPU 视图提供对齐的副本（`9-wsmark-plugin.sh`）。他们的测试 `desktop/renderfix-test.sh`：修复前 512/1024 像素错误，修复后 0 |
+| 无法调节亮度：内屏被当成外接显示器，固定 100% 亮度 | 固件让 eDP 背光走显示引擎的 PWM（控制器 0，占空比寄存器 `0xC8258`）。`brightness/` 提供 SSDT-PNLF（WindowServer 第一次打开显示器时 macOS 检查的 `backlight` 设备）；XeGfxIntelFB 0.9.7（`xeintelfb/bootvram.patch`）把内屏报告为内置屏，使其成为 `AppleBacklightDisplay`，并由 `XeGfxBacklight` 处理程序写 PWM。系统亮度滑块和控制中心可用；`desktop/brightkeys` 提供 Control-Option-↑/↓。键盘自带的亮度键仍然无法到达 macOS |
 | Wi-Fi 连接后 1-5 分钟反复出现内核崩溃 `Kernel trap at 0xffffffff....1130` | 与显卡无关：AirportItlwm 2.4.0（VedCloud 为 7E40 网卡制作的版本）的 `iwx_rm_sta_cmd` 在只有 9 项的表上遍历 16 个 TID，破坏了 `mac_ctxt_task`。在 `opencore/build_clean07.py` 中用一个两字节的 OpenCore `Kernel/Patch` 修复（`ITLWM_FIND` / `ITLWM_REPL`） |
 
 桌面会在开机时自动启动（`desktop/autostart-boot.sh`，一个 LaunchDaemon；创建
@@ -81,6 +82,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
 - `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C、轮询启动参数，以及修复光标飞走和空闲轮询的补丁
+- `brightness/` - 原生亮度所需的 SSDT-PNLF，以及把它加进当前 EFI 的脚本
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
 - `acpi/` - 在 Windows 上从你自己的固件生成 EFI 所需的 DSDT 和 MADT（`make-acpi-tables.cmd`）
 

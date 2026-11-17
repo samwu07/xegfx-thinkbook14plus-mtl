@@ -82,7 +82,8 @@ for k in XeGfxAccel XgFbMove; do
   rm -rf "$EXT/$k.kext"; mv "$EXT/$k.kext.new" "$EXT/$k.kext"
 done
 NEW="$KC.metal-new"; rm -f "$NEW"
-if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" --repository "$EXT" -A "$NEW" -z > "$BK/kmutil.log" 2>&1; then
+REPOS=(--repository "$EXT"); [ -d /Library/Apple/System/Library/Extensions ] && REPOS+=(--repository /Library/Apple/System/Library/Extensions)   # Apple's own aux kexts (RemoteVirtualInterface)
+if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" "${REPOS[@]}" -A "$NEW" -z > "$BK/kmutil.log" 2>&1; then
   cp "$BK/kmutil.log" "$REPORT/"
   rm -rf "$EXT/XeGfxAccel.kext" "$EXT/XgFbMove.kext"
   grep -i -E 'error|unresolved|symbol' "$BK/kmutil.log" | head -20 || true   # no match must not end the script before die

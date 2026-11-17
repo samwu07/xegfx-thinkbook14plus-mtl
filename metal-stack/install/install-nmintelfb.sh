@@ -48,7 +48,8 @@ find "$EXT/NMIntelFB.kext.new" -name '._*' -delete
 chown -R root:wheel "$EXT/NMIntelFB.kext.new"; chmod -R 755 "$EXT/NMIntelFB.kext.new"
 rm -rf "$EXT/NMIntelFB.kext"; mv "$EXT/NMIntelFB.kext.new" "$EXT/NMIntelFB.kext"; SWAPPED=1
 NEW="$KC.nmintelfb-new"; rm -f "$NEW"
-if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" --repository "$EXT" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
+REPOS=(--repository "$EXT"); [ -d /Library/Apple/System/Library/Extensions ] && REPOS+=(--repository /Library/Apple/System/Library/Extensions)   # Apple's own aux kexts (RemoteVirtualInterface)
+if ! kmutil create -n aux --volume-root / "${KARG[@]}" -B "$KB" -S "$KS" "${REPOS[@]}" -A "$NEW" -z > "$REPORT/kmutil.log" 2>&1; then
   grep -i -E 'error|unresolved|symbol' "$REPORT/kmutil.log" | head -20
   die "the collection did not link (log in $REPORT/kmutil.log)"
 fi
