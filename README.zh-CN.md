@@ -59,6 +59,10 @@ macOS 原来完全识别不到电池（`pmset` 只列出“AC Power”）。只�
 和 undo；从 Windows 部署 EFI 后需要再运行一次）。插着电源停在 80%、显示“not charging”，是联想的电池养护上限，
 在 Windows 或 BIOS 里设置。
 
+它还让 CPU 快了很多。没有电池时，macOS 会限制 MacBook 的功耗（这个 EFI 报告的机型是 MacBookPro16,2）。单线程乘法测试
+（`cpuname/tools/ghz.c`，用 `clang -O2 -o ghz ghz.c` 编译，8 次）：之前中位数约 1.65 GHz（范围 1.06-3.56），之后约 3.25 GHz（2.61-3.76）。随后 Edge 滚动
+达到 60 帧/秒，而之前的滚动测试只有 33-45 帧。macOS 具体怎样施加这个限制没有追查，而且之前那次测试是在更早的一次开机里。
+
 睡眠仍然关闭（`pmset` 中 `sleep 0`）。固件不提供 S3：DSDT 里 `SS3 = Zero`，这台机器只支持现代待机（S0ix），
 而 macOS 在这类机器上不使用它。XeGfx 也没有挂起和恢复：GPU 醒来时会丢失 GuC、GGTT 和显示状态。休眠（S4 存在）
 同样会失败，因为 XeGfx 接不上一块已被重置的 GPU。
@@ -96,6 +100,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
 - `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C、轮询启动参数，以及修复光标飞走和空闲轮询的补丁
+- `cpuname/` - 在当前 EFI 上加入 RestrictEvents 以显示真实 CPU 名称，以及测频率的工具（`tools/`）
 - `battery/` - 在当前 EFI 上加入 SMCBatteryManager，用于显示电池状态
 - `brightness/` - 原生亮度所需的 SSDT-PNLF，以及把它加进当前 EFI 的脚本
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包

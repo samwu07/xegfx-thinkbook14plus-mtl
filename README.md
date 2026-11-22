@@ -63,6 +63,11 @@ No ECEnabler or ACPI patch is needed: every field the DSDT's `BAT1` and `ACAD` r
 and undo too; after a Windows EFI deploy, apply again). "Not charging" at 80% on AC is Lenovo's battery conservation
 limit, set from Windows or the BIOS.
 
+It also made the CPU much faster. Without a battery, macOS limits the power of a MacBook (this EFI reports a
+MacBookPro16,2). Single-thread multiply test (`cpuname/tools/ghz.c`, built with `clang -O2 -o ghz ghz.c`, 8 runs): median ~1.65 GHz before (range 1.06-3.56),
+~3.25 GHz after (2.61-3.76). Edge then scrolled at 60 frames/s, where earlier scrolling benches gave 33-45. How macOS
+applies the limit was not traced, and the run before was on an earlier boot.
+
 Sleep stays off (`pmset` `sleep 0`). The firmware offers no S3: the DSDT has `SS3 = Zero`, so the machine only does
 Modern Standby (S0ix), which macOS does not use on these machines. XeGfx also has no suspend and resume: the GPU would come
 back without its GuC, GGTT and display state. Hibernation (S4 exists) fails the same way, because XeGfx cannot pick up a
@@ -105,6 +110,7 @@ libdrm and LLVM.
 - `opencore/` - the OpenCore package builder used here (configs and kexts are not in the source tree; see Releases)
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
 - `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI, the polling boot-arg, and the patches that fix the flying cursor and the idle polling
+- `cpuname/` - RestrictEvents on the live EFI for the real CPU name, and the clock tests (`tools/`)
 - `battery/` - SMCBatteryManager on the live EFI, for the battery status
 - `brightness/` - SSDT-PNLF for native brightness and the script that adds it to the live EFI
 - `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences

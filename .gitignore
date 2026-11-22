@@ -28,3 +28,7 @@ touchpad/x/
 battery/kexts/
 battery/downloads/
 battery/backup-*/
+cpuname/tools/ghz
+cpuname/downloads/
+cpuname/kexts/
+cpuname/backup-*/
