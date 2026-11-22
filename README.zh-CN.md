@@ -50,6 +50,19 @@ bluetoothd 中 `LE_InitMultipleAdvertising` 失败。隔空投送（AirDrop）�
 以及轮询永远不会进入空闲（白白占用 CPU 0 每秒约 7600 次中断）。对 VoodooI2CHID 的补丁（对可疑帧重读并投票、空闲检测）解决了这两个问题：
 滑动 40 秒内超过 120 点的跳变从 185 到 311 次降到 7 次。详情、补丁和脚本见 `touchpad/README.txt` 和 `touchpad/patches/`。
 
+## 电池与睡眠
+
+macOS 原来完全识别不到电池（`pmset` 只列出“AC Power”）。只需加上 SMCBatteryManager 1.3.8（与 EFI 中
+`VirtualSMC.kext` 同一个 VirtualSMC 发布包）就能解决：`pmset -g batt` 会显示 `InternalBattery-0` 及其电量。
+不需要 ECEnabler，也不需要 ACPI 补丁：DSDT 中 `BAT1` 和 `ACAD` 读取的所有字段都位于 EC 的内存映射区域
+（`0xFE0B0400`），而不是 EmbeddedControl 空间。`sudo bash battery/add-battery.sh apply` 会把它加进当前 EFI（另有 check
+和 undo；从 Windows 部署 EFI 后需要再运行一次）。插着电源停在 80%、显示“not charging”，是联想的电池养护上限，
+在 Windows 或 BIOS 里设置。
+
+睡眠仍然关闭（`pmset` 中 `sleep 0`）。固件不提供 S3：DSDT 里 `SS3 = Zero`，这台机器只支持现代待机（S0ix），
+而 macOS 在这类机器上不使用它。XeGfx 也没有挂起和恢复：GPU 醒来时会丢失 GuC、GGTT 和显示状态。休眠（S4 存在）
+同样会失败，因为 XeGfx 接不上一块已被重置的 GPU。
+
 ## 二进制文件（Releases）
 
 [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) 页面里有这台可正常工作的机器的备份，仅限非商业用途：
@@ -83,6 +96,7 @@ Meteor Lake 版 AirportItlwm、MADT 格式和 SSDT-PLUG-ALT）、
 - `opencore/` - 这里使用的 OpenCore 打包脚本（源码树中不含配置和内核扩展，见 Releases）
 - `bt/` - 在当前 EFI 上启用 Intel 蓝牙，以及它所需的 NVRAM 键
 - `touchpad/` - Goodix I2C 触摸板：在当前 EFI 上启用 VoodooI2C、轮询启动参数，以及修复光标飞走和空闲轮询的补丁
+- `battery/` - 在当前 EFI 上加入 SMCBatteryManager，用于显示电池状态
 - `brightness/` - 原生亮度所需的 SSDT-PNLF，以及把它加进当前 EFI 的脚本
 - `release/` - 收集 EFI（去除本机身份信息）和驱动，并连同许可证打包成公开的 Release 压缩包
 - `acpi/` - 在 Windows 上从你自己的固件生成 EFI 所需的 DSDT 和 MADT（`make-acpi-tables.cmd`）

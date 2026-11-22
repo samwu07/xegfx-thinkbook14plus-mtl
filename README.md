@@ -54,6 +54,20 @@ and then returns a coordinate with a zero byte for one report, and it never let 
 on CPU 0 for nothing). A patch to VoodooI2CHID (re-read and vote on suspicious frames, idle detection) fixes both: jumps
 over 120 pt in 40 s of swiping 185-311 -> 7. Details, patches and scripts: `touchpad/README.txt`, `touchpad/patches/`.
 
+## Battery and sleep
+
+macOS saw no battery at all (`pmset` listed only "AC Power"). SMCBatteryManager 1.3.8, from the same VirtualSMC release
+as the `VirtualSMC.kext` in the EFI, fixes it on its own: `pmset -g batt` shows `InternalBattery-0` with its charge.
+No ECEnabler or ACPI patch is needed: every field the DSDT's `BAT1` and `ACAD` read sits in the EC's memory-mapped region
+(`0xFE0B0400`), not in EmbeddedControl space. `sudo bash battery/add-battery.sh apply` adds it to the live EFI (check
+and undo too; after a Windows EFI deploy, apply again). "Not charging" at 80% on AC is Lenovo's battery conservation
+limit, set from Windows or the BIOS.
+
+Sleep stays off (`pmset` `sleep 0`). The firmware offers no S3: the DSDT has `SS3 = Zero`, so the machine only does
+Modern Standby (S0ix), which macOS does not use on these machines. XeGfx also has no suspend and resume: the GPU would come
+back without its GuC, GGTT and display state. Hibernation (S4 exists) fails the same way, because XeGfx cannot pick up a
+GPU that was reset.
+
 ## Binaries (Releases)
 
 The [Releases](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/releases) page has a backup of the working machine,
@@ -91,6 +105,7 @@ libdrm and LLVM.
 - `opencore/` - the OpenCore package builder used here (configs and kexts are not in the source tree; see Releases)
 - `bt/` - Intel Bluetooth on the live EFI and the NVRAM keys it needs
 - `touchpad/` - Goodix I2C touchpad: VoodooI2C on the live EFI, the polling boot-arg, and the patches that fix the flying cursor and the idle polling
+- `battery/` - SMCBatteryManager on the live EFI, for the battery status
 - `brightness/` - SSDT-PNLF for native brightness and the script that adds it to the live EFI
 - `release/` - collecting the EFI (with the Mac's identity removed) and the drivers, and packing the public Release zips with their licences
 - `acpi/` - making the EFI's patched DSDT and MADT from your own firmware, on Windows (`make-acpi-tables.cmd`)

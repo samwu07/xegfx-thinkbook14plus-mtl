@@ -25,3 +25,6 @@ touchpad/downloads/
 touchpad/dsdt/
 touchpad/src/
 touchpad/x/
+battery/kexts/
+battery/downloads/
+battery/backup-*/
