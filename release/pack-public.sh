@@ -31,6 +31,10 @@ print('disabled:', ', '.join(off))
 EOF
 plutil -lint "$E/EFI/OC/config.plist" > /dev/null
 ditto --norsrc --noextattr "$ST/drivers" "$V"
+# the allow-list as shipped: the system part only (the apps on the machine's own list are its owner's business);
+# desktop/gpu-app.sh adds an app's line
+A="$V/Library-GPUBundles/nvmtl-allow.txt"
+if [ -f "$A" ]; then grep -E '^#|^!?(WindowServer|Terminal)$' "$A" > "$A.new"; mv "$A.new" "$A"; fi
 for d in "$E" "$V"; do ditto "$HERE/LICENSES" "$d/LICENSES"; cp "$HERE/THIRD-PARTY.txt" "$d/"; done
 cp "$HERE/README-FIRST.txt" "$E/"
 find "$P" \( -name '.DS_Store' -o -name '._*' \) -delete

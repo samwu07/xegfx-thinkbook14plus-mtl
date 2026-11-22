@@ -1,0 +1,70 @@
+--- a/VoodooI2CMultitouchHIDEventDriver.cpp
++++ b/VoodooI2CMultitouchHIDEventDriver.cpp
+@@ -753,6 +753,12 @@
+         for (int i = 0; i < children->getCount(); i++) {
+             IOHIDElement* element = OSDynamicCast(IOHIDElement, children->getObject(i));
+             
++            // the selective-reporting switches may sit directly in the configuration collection ...
++            if (element->conformsTo(kHIDPage_Digitizer, 0x57))
++                digitiser.surface_switch = element;
++            else if (element->conformsTo(kHIDPage_Digitizer, 0x58))
++                digitiser.button_switch = element;
++
+             if (element->conformsTo(kHIDPage_Digitizer, kHIDUsage_Dig_Finger)) {
+                 OSArray* sub_array = element->getChildElements();
+ 
+@@ -761,6 +767,11 @@
+ 
+                     if (sub_element->conformsTo(kHIDPage_Digitizer, kHIDUsage_Dig_DeviceMode))
+                         digitiser.input_mode = sub_element;
++                    // ... or in its finger collection
++                    else if (sub_element->conformsTo(kHIDPage_Digitizer, 0x57))
++                        digitiser.surface_switch = sub_element;
++                    else if (sub_element->conformsTo(kHIDPage_Digitizer, 0x58))
++                        digitiser.button_switch = sub_element;
+                 }
+             }
+         }
+--- a/VoodooI2CMultitouchHIDEventDriver.hpp
++++ b/VoodooI2CMultitouchHIDEventDriver.hpp
+@@ -102,6 +102,10 @@
+         
+         IOHIDElement*      contact_count = NULL;
+         IOHIDElement*      input_mode = NULL;
++        // Precision Touchpad selective reporting (feature report, Digitizer page 0x57 Surface Switch, 0x58 Button Switch).
++        // Windows' touchpad-off shortcut clears both and the pad keeps them across a warm reboot.
++        IOHIDElement*      surface_switch = NULL;
++        IOHIDElement*      button_switch = NULL;
+         IOHIDElement*      primaryButton = NULL;
+         IOHIDElement*      secondaryButton = NULL;
+         
+--- a/VoodooI2CPrecisionTouchpadHIDEventDriver.cpp
++++ b/VoodooI2CPrecisionTouchpadHIDEventDriver.cpp
+@@ -18,6 +18,27 @@
+     OSData *value = OSData::withBytes(inputMode, sizeof(inputMode));
+     digitiser.input_mode->setDataValue(value);
+     OSSafeReleaseNULL(value);
++
++    // Selective reporting: Windows' touchpad-off shortcut writes 0 to the Surface Switch and Button Switch and the pad keeps
++    // that across a warm reboot, so macOS saw a dead pad. Turn both back on (same write as the input mode). Log once when
++    // one was found off, so a Windows toggle shows up in the log.
++    IOHIDElement *switches[2] = { digitiser.surface_switch, digitiser.button_switch };
++    for (int i = 0; i < 2; i++) {
++        if (!switches[i])
++            continue;
++        static bool said[2];
++        if (!said[i]) {
++            said[i] = true;
++            IOLog("%s::%s Precision Touchpad %s switch found, value %u: setting it to 1\n", getName(), name,
++                  i ? "Button" : "Surface", (unsigned)switches[i]->getValue(kIOHIDValueOptionsUpdateElementValues));
++        }
++        UInt8 on[] = { 1 };
++        OSData *sw = OSData::withBytes(on, sizeof(on));
++        if (sw) {
++            switches[i]->setDataValue(sw);
++            OSSafeReleaseNULL(sw);
++        }
++    }
+     ready = true;
+ }
+ 

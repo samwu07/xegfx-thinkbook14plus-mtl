@@ -6,6 +6,11 @@ repository; apply them to the upstream sources yourself.
 
   VoodooI2CHID-glitch-guard.patch    against VoodooI2C v2.9.1, folder "VoodooI2C Satellites/VoodooI2CHID" (git apply -p1 there)
       the fix: glitch guard (re-read), vote (read twice, third read decides), idle-poll fix, plus the diagnostics below
+  VoodooI2CHID-ptp-switches.patch    on top of glitch-guard, inside "VoodooI2C Satellites/VoodooI2CHID/VoodooI2CHID"
+      (patch -p1 there): sets the Precision Touchpad selective-reporting switches (Digitizer 0x57 surface, 0x58 button)
+      back on at start, so a touchpad turned off from Windows with its hotkey works again in macOS. In the EFI since
+      2026-11-21; not yet tested with a Windows toggle. Both patches applied give the source of the VoodooI2CHID.kext in
+      the 2026-11-23 Release.
   VoodooInput-trace.patch            against VoodooInput 1.1.6: ioreg counters on the finished Magic Trackpad report (diagnostic)
   VoodooI2C-nativeengine-trace.patch against VoodooI2C v2.9.1 "Multitouch Support" (diagnostic: jumps in the message)
 

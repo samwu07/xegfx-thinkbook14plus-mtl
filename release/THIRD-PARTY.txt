@@ -9,7 +9,7 @@ Credit goes to the authors below; this repository only adds the patches in metal
 
 Upstream projects this work rests on
 ------------------------------------
-  WTLIntelGfx / XeGfx, watchthelight      https://github.com/watchthelight-labs/WTLIntelGfx  (v0.0.47, a3fd73ed)
+  WTLIntelGfx / XeGfx, watchthelight      https://github.com/watchthelight-labs/WTLIntelGfx  (v0.0.48, 972d75a3)
   NullMoth Systems nvidia-macos-driver    https://github.com/nullmoth/nvidia-macos-driver
   VedCloud Meteor-Lake-Xe-LPG-Metal-Graphics
                                           https://github.com/VedCloud/Meteor-Lake-Xe-LPG-Metal-Graphics
@@ -40,7 +40,7 @@ EFI-CLEAN-07Y-public-*.zip
                                                                                 GPL-2.0 (itlwm.txt); carries Intel Wi-Fi
                                                                                 firmware: LICENCE.iwlwifi_firmware. The 2-byte Kernel/Patch in
                                                                                 config.plist: opencore/build_clean07.py
-  XeGfx 0.0.47                            WTLIntelGfx release v0.0.47           BSD-2-Clause (WTLIntelGfx-BSD-2.txt) for
+  XeGfx 0.0.48                            WTLIntelGfx release v0.0.48           BSD-2-Clause (WTLIntelGfx-BSD-2.txt) for
                                           https://github.com/watchthelight-labs/WTLIntelGfx  its own code; drm-kmod / Linux
                                                                                 DRM and i915 (MIT, some GPL-2.0), LinuxKPI
                                                                                 and FreeBSD (BSD), xkpi per file incl.
@@ -49,6 +49,15 @@ EFI-CLEAN-07Y-public-*.zip
       Contents/Resources/mtl_guc_70.bin   Intel GuC firmware, also linked into the kext
                                                                                 LICENSE.i915 (redistribution in binary
                                                                                 form only, no reverse engineering)
+  RestrictEvents 1.1.6                    acidanthera/RestrictEvents, tag 1.1.6 BSD-3-Clause (RestrictEvents.txt)
+  BrightnessKeys 1.0.3                    acidanthera/BrightnessKeys, tag 1.0.3 BSD-3-Clause (BrightnessKeys.txt)
+  VoodooI2C 2.9.1, with VoodooGPIO,       VoodooI2C/VoodooI2C, tag v2.9.1        GPL-3.0 (VoodooI2C.txt, VoodooGPIO.md);
+  VoodooI2CServices and VoodooInput       VoodooInput 1.1.6 (acidanthera)       VoodooInput GPL-2.0 (VoodooInput.txt).
+  in PlugIns, and VoodooI2CHID            Built here: VoodooI2C and VoodooInput with touchpad/patches/*-trace.patch,
+                                          VoodooI2CHID with VoodooI2CHID-glitch-guard.patch + -ptp-switches.patch
+                                          (this repository; source: upstream tag + those patches). VoodooGPIO and
+                                          VoodooI2CServices are the release binaries. Info.plist adds PCI 8086:7E78.
+  ACPI/SSDT-PNLF.aml                      this repository, brightness/acpi       BSD-2-Clause (LICENSE)
   ACPI/SSDT-PLUG-ALT.aml                  byte-identical to VedCloud's and OpCore-Simplify's output
   ACPI/SSDT-USBX.aml                      USBX sample, OpenCorePkg Docs/AcpiSamples BSD-3-Clause
   ACPI/SSDT-TB21LD-EC.aml, -PS2VIS.aml    this repository                       BSD-2-Clause (LICENSE)
@@ -58,17 +67,18 @@ EFI-CLEAN-07Y-public-*.zip
 
 xegfx-drivers-*.zip
 -------------------
-  Library-Extensions/XeGfxAccel.kext 0.9.5, XeGfxAGDC.kext 0.1.1
-                                          WTLIntelGfx a3fd73ed kexts/ + metal-stack/xeflip/wtl-worktree.patch,
-                                          xeflip.patch, wsmark.patch (this repository); forks of NullMoth's driver
+  Library-Extensions/XeGfxAccel.kext 0.9.6, XeGfxAGDC.kext 0.1.1
+                                          WTLIntelGfx 972d75a3 kexts/ + metal-stack/xeflip/wtl-worktree.patch,
+                                          xeflip.patch, gpufb.patch, wsmark.patch, backlight.patch (this repository);
+                                          forks of NullMoth's driver
                                                                                 PolyForm Noncommercial 1.0.0; compiled
                                                                                 against NVIDIA open-gpu-kernel-modules
                                                                                 headers (MIT, NVIDIA-...-COPYING.txt)
-  Library-Extensions/XeGfxIntelFB.kext 0.9.4
+  Library-Extensions/XeGfxIntelFB.kext 0.9.7
                                           WTLIntelGfx kexts/XeGfxIntelFB + metal-stack/xeintelfb/bootvram.patch
                                                                                 BSD-2-Clause (WTLIntelGfx-BSD-2.txt)
-  Library-Extensions/XgFbMove.kext 1.2    this repository, metal-stack/xgfbmove BSD-2-Clause (LICENSE)
-  Library-GPUBundles/NVMTLDriver.bundle   WTLIntelGfx plugin/ + wtl-worktree.patch + wsmark-plugin.patch
+  Library-GPUBundles/NVMTLDriver.bundle   WTLIntelGfx plugin/ + wtl-worktree.patch + wsmark-, hostsync-, renderfix-
+                                          (jxy333967), framelog-, barrier-region-, surfpin- and hostalias-plugin.patch
                                                                                 PolyForm Noncommercial 1.0.0
     Contents/MacOS/air-runtime/           MacPorts builds, relinked to @loader_path by
                                           metal-stack/desktop/add-bitcode-reader.sh (you may replace any of them):
@@ -86,13 +96,14 @@ xegfx-drivers-*.zip
   Library-GPUBundles/nvmtl/libvulkan_intel.dylib
                                           Mesa 26.3.0-devel (ANV), commit bffd919 of
                                           https://gitlab.freedesktop.org/mesa/mesa + WTLIntelGfx userland/patches/
-                                          mesa-macos.patch (PolyForm NC, NullMoth) and mesa-xegfx.patch (MIT)
+                                          mesa-macos.patch (PolyForm NC, NullMoth) and mesa-xegfx.patch (MIT), + metal-stack/xemesa/
+                                          hostptr-mesa.patch (this repository, MIT)
                                                                                 MIT (Mesa-license.rst, Mesa-MIT.txt)
   Library-GPUBundles/nvmtl/libdrm.2.dylib libdrm commit b97cbde of https://gitlab.freedesktop.org/mesa/libdrm +
                                           WTLIntelGfx userland/patches/libdrm-macos.patch (PolyForm NC) and
                                           libdrm-xegfx.patch (MIT)              MIT (libdrm-xf86drm.c-header.txt)
   Library-GPUBundles/nvmtl/libnvmtl_translate.dylib
-                                          WTLIntelGfx translator/ at a3fd73ed (a fork of steelbrain's metal2vulkan);
+                                          WTLIntelGfx translator/ at 972d75a3 (same as a3fd73ed) (a fork of steelbrain's metal2vulkan);
                                           Rust crates per translator/Cargo.lock (MIT / Apache-2.0)
                                                                                 LGPL-3.0 (translator-LGPL-3.0.txt,
                                                                                 spdx-GPL-3.0-only.txt)
