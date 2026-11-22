@@ -1,0 +1,179 @@
+diff -ru pa/plugin/NVMTLDevice.m pb/plugin/NVMTLDevice.m
+--- pa/plugin/NVMTLDevice.m	2026-11-15 01:21:49
++++ pb/plugin/NVMTLDevice.m	2026-11-15 01:48:02
+@@ -1067,7 +1067,7 @@
+ static char nvmtl_surface_cache_key;
+ // <framelog> counters read by the WindowServer frame log (nvmtl_ws_frame_diag): 0 surface textures asked for, 1 their wall
+ // time in ns (lock wait included), 2 host imports, 3 their ns, 4 texture-barrier snapshot refreshes, 5 textures really created.
+-uint64_t nvmtl_fl[8];
++uint64_t nvmtl_fl[12];   // 6 barrier pixels copied, 7 what a full copy would have been, 8 barriers that copied nothing, 9 pass-start full copies
+ - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)surf plane:(NSUInteger)plane {
+     const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+     id<MTLTexture> r;
+diff -ru pa/plugin/NVMTLEventSync.m pb/plugin/NVMTLEventSync.m
+--- pa/plugin/NVMTLEventSync.m	2026-11-15 01:21:49
++++ pb/plugin/NVMTLEventSync.m	2026-11-15 01:48:02
+@@ -306,17 +306,18 @@
+     // total, commit->GPU, GPU, end->done in us, parts, and what the main thread did since the previous composite: surface
+     // textures asked for (count, us), host imports (count, us), texture-barrier snapshot refreshes, textures really made.
+     {
+-        extern uint64_t nvmtl_fl[8]; void nvlog_raw(const char *fmt, ...);
++        extern uint64_t nvmtl_fl[12]; void nvlog_raw(const char *fmt, ...);
+         static _Atomic uint64_t chk; static _Atomic int on;
+         const uint64_t last_chk = atomic_load(&chk);
+         if (now - last_chk > 1000000000ull && atomic_compare_exchange_strong(&chk, &(uint64_t){last_chk}, now))
+             atomic_store(&on, access("/Library/GPUBundles/framelog-on", F_OK) == 0);
+         if (atomic_load(&on)) {
+-            uint64_t f[6]; for (int i = 0; i < 6; i++) f[i] = __atomic_exchange_n(&nvmtl_fl[i], 0, __ATOMIC_RELAXED);
+-            nvlog_raw("WSFRAME t=%llu total=%llu q=%llu g=%llu dn=%llu parts=%lu tex=%llu/%lluus imp=%llu/%lluus bar=%llu made=%llu",
++            uint64_t f[10]; for (int i = 0; i < 10; i++) f[i] = __atomic_exchange_n(&nvmtl_fl[i], 0, __ATOMIC_RELAXED);
++            nvlog_raw("WSFRAME t=%llu total=%llu q=%llu g=%llu dn=%llu parts=%lu tex=%llu/%lluus imp=%llu/%lluus bar=%llu made=%llu barpx=%llu/%llu skipped=%llu passcopy=%llu",
+                       (unsigned long long)(now / 1000000ull), (unsigned long long)total, (unsigned long long)q, (unsigned long long)g,
+                       (unsigned long long)dn, (unsigned long)parts, (unsigned long long)f[0], (unsigned long long)(f[1] / 1000),
+-                      (unsigned long long)f[2], (unsigned long long)(f[3] / 1000), (unsigned long long)f[4], (unsigned long long)f[5]);
++                      (unsigned long long)f[2], (unsigned long long)(f[3] / 1000), (unsigned long long)f[4], (unsigned long long)f[5],
++                      (unsigned long long)f[6], (unsigned long long)f[7], (unsigned long long)f[8], (unsigned long long)f[9]);
+         }
+     }
+     if (total > 50000 && atomic_fetch_add(&logged, 1) < 8)
+diff -ru pa/plugin/NVMTLObjects.m pb/plugin/NVMTLObjects.m
+--- pa/plugin/NVMTLObjects.m	2026-11-15 01:21:49
++++ pb/plugin/NVMTLObjects.m	2026-11-15 01:48:02
+@@ -3688,15 +3688,30 @@
+     // A pre-pass snapshot cannot satisfy a read-after-write barrier. End the
+     // physical Vulkan pass, refresh that same snapshot, and resume with LOAD.
+     // The logical Metal encoder, resource ownership and state remain intact.
++    // <barrierregion> The snapshot equals the target at the start of the pass and after every refresh, so only what the pass
++    // drew since then has to be copied: the union of its draws' scissors; nothing drawn = nothing to do (no pass split).
++    // /Library/GPUBundles/nobarrierregion puts the full copy back.
++    extern uint64_t nvmtl_fl[12];
++    int32_t rx = 0, ry = 0; uint32_t rw = [root nvi]->w, rh = [root nvi]->h;
++    const uint64_t fullpx = (uint64_t)rw * rh;
++    if (nvmtl_region_on()) {
++        const int st = nvmtl_vk_snapshot_dirty(&_cb->_c, &rx, &ry, &rw, &rh);
++        if (st == 0) {
++            __atomic_fetch_add(&nvmtl_fl[7], fullpx, __ATOMIC_RELAXED); __atomic_fetch_add(&nvmtl_fl[8], 1, __ATOMIC_RELAXED);
++            return;
++        }
++        if (st == 2) { rx = 0; ry = 0; rw = [root nvi]->w; rh = [root nvi]->h; }
++    }
++    __atomic_fetch_add(&nvmtl_fl[6], (uint64_t)rw * rh, __ATOMIC_RELAXED); __atomic_fetch_add(&nvmtl_fl[7], fullpx, __ATOMIC_RELAXED);
+     NVMTLRenderPipelineState *saved = _ps;
+     const uint32_t oldLoad = _pass.load;
+     nvmtl_vk_cmd_end_render(&_cb->_c); _begun=NO;
+-    int rc=nvmtl_vk_cmd_copy_image(&_cb->_c,[root nvi],0,0,[_snap nvi],0,0,[root nvi]->w,[root nvi]->h);
++    int rc=nvmtl_vk_cmd_copy_image(&_cb->_c,[root nvi],(uint32_t)rx,(uint32_t)ry,[_snap nvi],(uint32_t)rx,(uint32_t)ry,rw,rh);
+     _pass.load |= NVMTL_LOAD_ALL;
+     [self setRenderPipelineState:saved];
+     _pass.load=oldLoad;
+     if (rc || !_begun) { [self nvmtlSamplePositionError:@"texture barrier: snapshot refresh/resume failed"]; return; }
+-    { extern uint64_t nvmtl_fl[8]; __atomic_fetch_add(&nvmtl_fl[4], 1, __ATOMIC_RELAXED); }   // <framelog>
++    { __atomic_fetch_add(&nvmtl_fl[4], 1, __ATOMIC_RELAXED); }   // <framelog>
+     { static unsigned n; if (n++ < 8 || n % 5000 == 0) nvlog("CDX texture barrier refreshed current snapshot and resumed LOAD [%u so far]", n); }
+ }
+ - (void)textureBarrier { [self nvmtlRefreshSnapshotAtTextureBarrier]; }
+@@ -5200,7 +5215,8 @@
+     if (e->_target && d.colorAttachments[0].loadAction == MTLLoadActionLoad) {
+         NVMTLTexture *r = e->_target->_parent ?: e->_target, *snap = nvmtl_self_snap(r, NO);
+         if (snap && !(nvmtl_xe_live_mask_r(1) & 256) && !nvmtl_vk_cmd_copy_image(&_c, [r nvi], 0, 0, [snap nvi], 0, 0, [r nvi]->w, [r nvi]->h)) {
+-            e->_snap = snap; if (!_resources) _resources = [NVMTLResSet new]; [_resources addObject:snap]; }
++            e->_snap = snap; if (!_resources) _resources = [NVMTLResSet new]; [_resources addObject:snap];
++            { extern uint64_t nvmtl_fl[12]; __atomic_fetch_add(&nvmtl_fl[9], 1, __ATOMIC_RELAXED); } }   // <framelog>
+     }
+     if (!_resources) _resources = [NVMTLResSet new];
+     if (e->_target) [_resources addObject:e->_target];
+diff -ru pa/plugin/nvmtl_vk.c pb/plugin/nvmtl_vk.c
+--- pa/plugin/nvmtl_vk.c	2026-11-15 01:21:49
++++ pb/plugin/nvmtl_vk.c	2026-11-15 01:48:02
+@@ -5215,6 +5215,7 @@
+       } }
+     pvkCmdBeginRenderPass(c->cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+     c->in_rp = 1; c->self_tex = 0;
++    c->has_sc = 0; c->dr_state = 0; c->rp_w = ps->w; c->rp_h = ps->h;   // <barrierregion>
+     for (uint32_t i = 0; i < NVMTL_NCOL; i++) c->fetchview[i] = (i < ncol && cf[i]) ? ps->colview[i] : NULL;
+     if (p->pipe) nvmtl_vk_cmd_bind_pipeline(c, p);
+     VkViewport vp = { 0, (float)ps->h, (float)ps->w, -(float)ps->h, 0, 1 }; VkRect2D sc = { { 0, 0 }, { ps->w, ps->h } };
+@@ -5619,8 +5620,37 @@
+  * clears the write-masked bits, and writes colour and depth as the draw would), then once per write-mask bit, with only
+  * that bit writable, that bit as the reference, and depth writes off.
+  */
++// <barrierregion> a draw writes at most its scissor (the pass extent when none is set): note it
++static inline void nvmtl_dirty_note(nvk_cmdbuf *c) {
++    if (c->dr_state == 2) return;
++    if (!c->rp_w || !c->rp_h) { c->dr_state = 2; return; }
++    int32_t x0 = 0, y0 = 0, x1 = (int32_t)c->rp_w, y1 = (int32_t)c->rp_h;
++    if (c->has_sc) {
++        const int64_t sx1 = (int64_t)c->sc_x + c->sc_w, sy1 = (int64_t)c->sc_y + c->sc_h;
++        if (c->sc_x > x0) x0 = c->sc_x; if (c->sc_y > y0) y0 = c->sc_y;
++        if (sx1 < x1) x1 = (int32_t)sx1; if (sy1 < y1) y1 = (int32_t)sy1;
++    }
++    if (x1 <= x0 || y1 <= y0) return;   // an empty scissor draws nothing
++    if (c->dr_state == 0) { c->dr_x0 = x0; c->dr_y0 = y0; c->dr_x1 = x1; c->dr_y1 = y1; c->dr_state = 1; return; }
++    if (x0 < c->dr_x0) c->dr_x0 = x0; if (y0 < c->dr_y0) c->dr_y0 = y0;
++    if (x1 > c->dr_x1) c->dr_x1 = x1; if (y1 > c->dr_y1) c->dr_y1 = y1;
++}
++int nvmtl_vk_snapshot_dirty(nvk_cmdbuf *c, int32_t *x, int32_t *y, uint32_t *w, uint32_t *h) {
++    const unsigned s = c->dr_state; c->dr_state = 0;
++    if (s == 1) { *x = c->dr_x0; *y = c->dr_y0; *w = (uint32_t)(c->dr_x1 - c->dr_x0); *h = (uint32_t)(c->dr_y1 - c->dr_y0); }
++    return (int)s;
++}
++// the switch file is looked at once a second
++int nvmtl_region_on(void) {
++    static _Atomic uint64_t chk; static _Atomic int on = 1;
++    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), last = atomic_load(&chk);
++    if (now - last > 1000000000ull && atomic_compare_exchange_strong(&chk, &(uint64_t){last}, now))
++        atomic_store(&on, access("/Library/GPUBundles/nobarrierregion", F_OK) != 0);
++    return atomic_load(&on);
++}
+ #define NVMTL_SEMU_DRAW(c, DRAW) do { \
+     if ((c)->skip_group) break; \
++    nvmtl_dirty_note(c); \
+     if (!(c)->semu_layout) { DRAW; break; } \
+     uint32_t z_ = 0; const uint32_t m_ = (c)->st_wmask[0] | (c)->st_wmask[1]; \
+     pvkCmdPushConstants((c)->cb, (VkPipelineLayout)(c)->semu_layout, VK_SHADER_STAGE_FRAGMENT_BIT, NVMTL_STENCIL_EMU_OFFSET, 4, &z_); \
+@@ -5701,7 +5731,7 @@
+     NVMTL_SEMU_DRAW(c, pvkCmdDraw(c->cb, count, n, first, baseInstance));
+ }
+ void nvmtl_vk_cmd_set_scissor(nvk_cmdbuf *c, int32_t x, int32_t y, uint32_t w, uint32_t h)
+-{ VkRect2D r = { { x, y }, { w, h } }; pvkCmdSetScissor(c->cb, 0, 1, &r); }
++{ VkRect2D r = { { x, y }, { w, h } }; c->sc_x = x; c->sc_y = y; c->sc_w = w; c->sc_h = h; c->has_sc = 1; pvkCmdSetScissor(c->cb, 0, 1, &r); }
+ void nvmtl_vk_cmd_bind_pipeline(nvk_cmdbuf *c, nvk_pipeline *p) {
+     if (p->pipe && c->graphics_pipeline == p->pipe) return;
+     pvkCmdBindPipeline(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipeline)p->pipe);
+@@ -6656,7 +6686,7 @@
+     }
+     return on;
+ }
+-extern uint64_t nvmtl_fl[8];   // <framelog>
++extern uint64_t nvmtl_fl[12];   // <framelog>
+ static int nvmtl_vk_surface_host_import_inner(void *base, size_t alloc, nvk_buffer *out);
+ int nvmtl_vk_surface_host_import(void *base, size_t alloc, nvk_buffer *out)
+ {
+@@ -6951,6 +6981,7 @@
+     pvkCmdPushConstants(c->cb, (VkPipelineLayout)p->layout, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, 0, sizeof pc, &pc);
+     pvkCmdSetPrimitiveTopology(c->cb, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST);
+     pvkCmdSetPrimitiveRestartEnable(c->cb, VK_FALSE);
++    nvmtl_dirty_note(c);   // <barrierregion>
+     if (ind) pvkCmdDrawIndirect(c->cb, (VkBuffer)ind->buf, indoff, 1, 0);
+     else pvkCmdDraw(c->cb, count, instances ? instances : 1, start, baseInstance);
+     { static int told; if (!told++) nvlog("tess: first patch draw in this process (%s)", ind ? "indirect" : "direct"); }
+diff -ru pa/plugin/nvmtl_vk.h pb/plugin/nvmtl_vk.h
+--- pa/plugin/nvmtl_vk.h	2026-11-01 23:20:23
++++ pb/plugin/nvmtl_vk.h	2026-11-15 01:48:02
+@@ -91,7 +91,16 @@
+                  /* Vulkan graphics bindings persist until changed; compute has its own bind point. */
+                  void *graphics_pipeline, *graphics_layout, *graphics_sets[3];
+                  uint32_t graphics_set_count, graphics_offset_count, graphics_offsets[2];
++                 /* <barrierregion> what the open pass drew since its colour target was last copied into the self-read snapshot:
++                    the scissor in force (has_sc; a new pass starts with none = the whole target), the pass extent, and the
++                    union of the draws' scissors (dr_state 0 = nothing drawn, 1 = the rectangle dr_*, 2 = unknown = all) */
++                 int32_t sc_x, sc_y; uint32_t sc_w, sc_h; unsigned has_sc; uint32_t rp_w, rp_h;
++                 int32_t dr_x0, dr_y0, dr_x1, dr_y1; unsigned dr_state;
+                } nvk_cmdbuf;
++/* <barrierregion> 0: nothing was drawn since the last copy (the snapshot is current), 1: copy the rectangle, 2: copy it all.
++   Takes the dirty state (the caller copies right after). nvmtl_region_on(): /Library/GPUBundles/nobarrierregion absent. */
++int nvmtl_vk_snapshot_dirty(nvk_cmdbuf *c, int32_t *x, int32_t *y, uint32_t *w, uint32_t *h);
++int nvmtl_region_on(void);
+ int  nvmtl_vk_init(void);
+ int nvmtl_vk_sample_positions_backend(void);
+ int nvmtl_vk_sample_positions_default(uint32_t count, nvmtl_sample_pattern *out);

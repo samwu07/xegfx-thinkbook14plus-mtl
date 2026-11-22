@@ -17,6 +17,30 @@ int main(int argc, char **argv)
         printf("device: %s\n", d ? d.name.UTF8String : "NONE");
         if (!d) return 2;
         id<MTLCommandQueue> q = [d newCommandQueue];
+        if (argc > 1 && !strcmp(argv[1], "race")) {
+            // 2026-11-20 14:36: the caller frees its pages while the plugin is copying from them (big read-only buffers,
+            // so they are copied rather than imported). 300 rounds; the old plugin can fault in nvmtl_buffer_sync_in.
+            const size_t big = 0x1200000;
+            id<MTLBuffer> out = [d newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+            for (int r = 0; r < 300; r++) {
+                mach_vm_address_t a = 0;
+                if (mach_vm_allocate(mach_task_self(), &a, big, VM_FLAGS_ANYWHERE)) return 2;
+                memset((void *)a, r, big);
+                mach_vm_protect(mach_task_self(), a, big, FALSE, VM_PROT_READ);
+                id<MTLBuffer> src = [d newBufferWithBytesNoCopy:(void *)a length:big options:MTLResourceStorageModeShared deallocator:nil];
+                id<MTLCommandBuffer> cb = [q commandBuffer];
+                id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+                [e copyFromBuffer:src sourceOffset:big - 4096 toBuffer:out destinationOffset:0 size:4096];
+                [e endEncoding];
+                [cb commit];
+                usleep(r % 7 * 50);
+                mach_vm_deallocate(mach_task_self(), a, big);   // while the copy may be running
+                [cb waitUntilCompleted];
+                if (r % 50 == 0) printf("race round %d: status %lu\n", r, (unsigned long)cb.status);
+            }
+            puts("survived");
+            return 0;
+        }
         const size_t len = 0x21000;
         mach_vm_address_t a = 0;
         if (mach_vm_allocate(mach_task_self(), &a, len, VM_FLAGS_ANYWHERE)) return 2;

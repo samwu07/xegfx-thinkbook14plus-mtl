@@ -1,5 +1,5 @@
 #!/bin/bash
-# 8-xeintelfb.sh -- XeGfxIntelFB 0.9.7: the v0.0.47 source plus metal-stack/xeintelfb/bootvram.patch, built with
+# 8-xeintelfb.sh -- XeGfxIntelFB 0.9.7: the v0.0.48 source plus metal-stack/xeintelfb/bootvram.patch, built with
 # upstream's build_xegfxintelfb.sh, into /Volumes/PKG/metal-stack/out/kexts/XeGfxIntelFB.kext (0.9 kept in out/orig).
 # Why: 0.9 renames GFX0's IONDRVFramebuffer, but that one never comes online on this Mac -- the GOP framebuffer
 # (phys 0x7a800000, stolen memory) is in neither GFX0 BAR, so WindowServer's Intel FB fails to open and it keeps using
@@ -19,7 +19,7 @@ no_xegfx
 S="$HERE/xeintelfb"; P="$SRC/XeGfxIntelFB-bootvram"; O="$HERE/out"
 [ -f "$S/bootvram.patch" ] || { echo "missing $S/bootvram.patch"; exit 1; }
 [ -f "$WTL/build/build_xegfxintelfb.sh" ] || { echo "run 1-fetch.sh first"; exit 1; }
-[ "$(git -C "$WTL" rev-parse HEAD)" = "$WTL_REV" ] || { echo "$WTL is not at v0.0.47 ($WTL_REV): bootvram.patch is made for that source"; exit 1; }
+[ "$(git -C "$WTL" rev-parse HEAD)" = "$WTL_REV" ] || { echo "$WTL is not at $WTL_TAG ($WTL_REV): bootvram.patch is made for that source"; exit 1; }
 [ -d "$O/kexts" ] || { echo "run 5-collect.sh first"; exit 1; }
 B="$OUTROOT/kexts/XeGfxIntelFB-bootvram"
 

@@ -3,23 +3,24 @@
 [English](README.md) | 简体中文
 
 这里是一组脚本、补丁和笔记，把 [WTLIntelGfx / XeGfx](https://github.com/watchthelight-labs/WTLIntelGfx) v0.0.47
-从“第 4 阶段拒绝运行、屏幕上出现一条色带”推进到了 **由 GPU 合成的 macOS 桌面**。机器是 ThinkBook 14+ 2024
+和 v0.0.48 从“第 4 阶段拒绝运行、屏幕上出现一条色带”推进到了 **由 GPU 合成的 macOS 桌面**。机器是 ThinkBook 14+ 2024
 （Core Ultra 7 155H，核显 `8086:7D55`，macOS Sequoia 15.8.1，OpenCore 1.0.8）。
 
 仍属实验性质。测试时可能卡死或内核崩溃（panic），请保留另一个启动项和一个安全模式启动项作为退路。
-源码树里不含 Apple 软件、上游二进制文件或固件：脚本会在 Mac 上按固定提交（`a3fd73ed`，标签 v0.0.47）拉取并编译上游代码。
+源码树里不含 Apple 软件、上游二进制文件或固件：脚本会在 Mac 上按固定提交（`972d75a3`，标签 v0.0.48；2026-11-22 之前是 `a3fd73ed`，v0.0.47）拉取并编译上游代码。
+这里的补丁在两个版本上都能原样应用：它们改动的源码在两个标签之间完全相同。
 
 ## 遇到的问题与解决办法
 
 | 问题 | 解决办法（位置） |
 |---|---|
-| GOP 帧缓冲位于 GGTT `0xFE800000`，越过了 `GUC_GGTT_TOP`：第 4 阶段拒绝运行（-28），或 GuC 镜像在屏幕上显示成一条色带（上游 issue #13） | `XgFbMove.kext` 在 XeGfx 加载前，从 macOS 中把帧缓冲的 GGTT 映射移到一段空闲区域（`0x80000000`），并在 vblank 时重新指向 `PLANE_SURF`；热重启后会回收残留旧条目的区域（`metal-stack/xgfbmove`，逻辑在 `fbreloc/fbreloc_core.h`，主机测试在 `fbreloc/test_fbreloc.py`）。已在上游修复：[WTLIntelGfx#16](https://github.com/watchthelight-labs/WTLIntelGfx/pull/16)，第 4 阶段自行移动帧缓冲，因此只有 0.0.47 需要 XgFbMove，直到包含 #16 的发布版本推出 |
+| GOP 帧缓冲位于 GGTT `0xFE800000`，越过了 `GUC_GGTT_TOP`：第 4 阶段拒绝运行（-28），或 GuC 镜像在屏幕上显示成一条色带（上游 issue #13） | `XgFbMove.kext` 在 XeGfx 加载前，从 macOS 中把帧缓冲的 GGTT 映射移到一段空闲区域（`0x80000000`），并在 vblank 时重新指向 `PLANE_SURF`；热重启后会回收残留旧条目的区域（`metal-stack/xgfbmove`，逻辑在 `fbreloc/fbreloc_core.h`，主机测试在 `fbreloc/test_fbreloc.py`）。已在上游修复：[WTLIntelGfx#16](https://github.com/watchthelight-labs/WTLIntelGfx/pull/16)，随 [v0.0.48](https://github.com/watchthelight-labs/WTLIntelGfx/releases/tag/v0.0.48) 发布：第 4 阶段自行移动帧缓冲（本机：`xegfx-fbmove` status 1，`0xFE800000` -> `0x80000000`）。用 0.0.48 时，把 XgFbMove 移出 /Library/Extensions，并执行 `sudo touch /Library/XeGfx/stage4-move-in-kext`；只有 0.0.47 需要 XgFbMove |
 | 在登录密码界面卡死 | 按上游建议设置 `xegfx.nvram_trace=0` |
 | WindowServer 在 Intel Metal 设备上反复崩溃 | CoreDisplay 预编译的 `default.metallib` 需要 AIR 位码读取器：把 MacPorts LLVM 20 的 `libLLVM.dylib` 重新链接后放进插件的 `air-runtime/`（`metal-stack/desktop/add-bitcode-reader.sh`） |
 | 没有任何帧到达加速器（IOPresentment 关闭，上游 I-108） | GOP 帧缓冲位于 stolen memory，不在 GFX0 的两个 BAR 内，所以 GFX0 上的 IONDRVFramebuffer 始终没有上线，WindowServer 一直停在 UEFIGraphicsFB 的帧缓冲上。XeGfxIntelFB + `metal-stack/xeintelfb/bootvram.patch`：把控制台区域加为 GFX0 的设备内存，设置 `IOFBDependentID/Index`，并为 AGDC 提供屏幕 EDID 时序。另需 `debug.xegfx_agdc_k5=1` 和 `debug.nvaccel_iop=1`（`desktop-on.sh`） |
 | 每一帧都由 CPU 拷贝（3072x1920 下 22.5 MiB） | XeGfxAccel 中实验性的 Intel 零拷贝翻页：WindowServer 的表面只在空闲 GGTT 区域映射一次，在 vblank 时翻转 `PLANE_SURF`（`metal-stack/xeflip`，`desktop/xeflip.sh try`）。实测：翻页 602 帧，拷贝 0 帧，失败 0 次 |
 | 桌面被限制在约 30 帧/秒：WindowServer 以 30 Hz 的节拍合成 | XeGfxIntelFB 下面的启动 NDRV 没有 VBL 源。XeGfxIntelFB 0.9.4 注册了一个，由 pipe A 的帧计数器驱动（约 58 Hz；启动参数 `-xeintelfbnovbl` 可关闭）。另外，WindowServer 的完成标记改走加速器的 `XGDR` 连接，WindowServer 不再逐个等待合成完成（XeGfxAccel 0.9.4 及以后版本中的 `xeflip/wsmark.patch`，以及通过 `9-wsmark-plugin.sh` 应用的 `xeflip/wsmark-plugin.patch`；默认开启，`WSMARK=0` 关闭）。用 `desktop/fps-gaps` 测得：拖动窗口时约 58-60 帧/秒 |
-| 使用数小时后 WindowServer 崩溃（`nvmtl_buffer_sync_in` 中 SIGSEGV） | WindowServer 解除了一个仍在使用的 no-copy 缓冲区背后页面的映射；插件会复制只读的这类缓冲区，并从已失效的地址刷新，还会把结果写回只读页面。`xeflip/hostsync-plugin.patch` 在两次复制前都先检查页面（`9-wsmark-plugin.sh`；复现：`desktop/hostsync-test.sh`） |
+| 使用数小时后 WindowServer 崩溃（`nvmtl_buffer_sync_in` 中 SIGSEGV） | WindowServer 解除了一个仍在使用的 no-copy 缓冲区背后页面的映射；插件会复制只读的这类缓冲区，并从已失效的地址刷新，还会把结果写回只读页面。`xeflip/hostsync-plugin.patch` 在两次复制前都先检查页面（`9-wsmark-plugin.sh`；复现：`desktop/hostsync-test.sh`）。之后一次崩溃（2026-11-20）是竞争：WindowServer 在复制*进行中*释放了页面。`xeflip/hostalias-plugin.patch` 用 `mach_vm_remap` 把调用方的页面再映射一份到插件自己的地址范围，所有复制都经过这份映射，页面因此不会中途消失（`hostsync-test.sh race`）。相关：`xemesa/hostptr-mesa.patch`（`10-mesa-hostptr.sh`）在导入时就锁定主机内存，之后被解除映射的页面不会再让整个 Vulkan 设备丢失 |
 | 小组件圆角缺失、窗口背后的模糊（vibrancy）透明、出现异常色块 | 绘制读取自己的渲染目标时，纹理屏障没有刷新它读取的快照。[jxy333967](https://github.com/jxy333967) 的 `xeflip/renderfix-plugin.patch`（[issue #2](https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2)）会刷新快照，并为带行距的只读 CPU 视图提供对齐的副本（`9-wsmark-plugin.sh`）。他们的测试 `desktop/renderfix-test.sh`：修复前 512/1024 像素错误，修复后 0 |
 | 无法调节亮度：内屏被当成外接显示器，固定 100% 亮度 | 固件让 eDP 背光走显示引擎的 PWM（控制器 0，占空比寄存器 `0xC8258`）。`brightness/` 提供 SSDT-PNLF（WindowServer 第一次打开显示器时 macOS 检查的 `backlight` 设备）；XeGfxIntelFB 0.9.7（`xeintelfb/bootvram.patch`）把内屏报告为内置屏，使其成为 `AppleBacklightDisplay`，并由 `XeGfxBacklight` 处理程序写 PWM。系统亮度滑块和控制中心可用；`desktop/brightkeys` 提供 Control-Option-↑/↓。键盘自带的亮度键仍然无法到达 macOS |
 | Wi-Fi 连接后 1-5 分钟反复出现内核崩溃 `Kernel trap at 0xffffffff....1130` | 与显卡无关：AirportItlwm 2.4.0（VedCloud 为 7E40 网卡制作的版本）的 `iwx_rm_sta_cmd` 在只有 9 项的表上遍历 16 个 TID，破坏了 `mac_ctxt_task`。在 `opencore/build_clean07.py` 中用一个两字节的 OpenCore `Kernel/Patch` 修复（`ITLWM_FIND` / `ITLWM_REPL`） |

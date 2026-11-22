@@ -1,0 +1,93 @@
+diff -ru pa/plugin/NVMTLDevice.m pb/plugin/NVMTLDevice.m
+--- pa/plugin/NVMTLDevice.m	2026-11-02 18:07:49
++++ pb/plugin/NVMTLDevice.m	2026-11-15 01:21:34
+@@ -1065,13 +1065,21 @@
+ }
+ 
+ static char nvmtl_surface_cache_key;
++// <framelog> counters read by the WindowServer frame log (nvmtl_ws_frame_diag): 0 surface textures asked for, 1 their wall
++// time in ns (lock wait included), 2 host imports, 3 their ns, 4 texture-barrier snapshot refreshes, 5 textures really created.
++uint64_t nvmtl_fl[8];
+ - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)surf plane:(NSUInteger)plane {
++    const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++    id<MTLTexture> r;
+     @synchronized(self) {
+         NSMapTable *cache = objc_getAssociatedObject(self, &nvmtl_surface_cache_key);
+         if (!cache) { cache = [NSMapTable strongToWeakObjectsMapTable];
+             objc_setAssociatedObject(self, &nvmtl_surface_cache_key, cache, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+-        return [self nvmtlNewSurfaceTexture:d surface:surf plane:plane cache:cache];
++        r = [self nvmtlNewSurfaceTexture:d surface:surf plane:plane cache:cache];
+     }
++    __atomic_fetch_add(&nvmtl_fl[0], 1, __ATOMIC_RELAXED);
++    __atomic_fetch_add(&nvmtl_fl[1], clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0, __ATOMIC_RELAXED);
++    return r;
+ }
+ - (id<MTLTexture>)nvmtlNewSurfaceTexture:(MTLTextureDescriptor *)d surface:(IOSurfaceRef)surf plane:(NSUInteger)plane cache:(NSMapTable *)cache {
+     if (nvmtl_vk_init()) return nil;
+@@ -1109,6 +1117,7 @@
+     t->_usage = d.usage;
+     nvmtl_texture_desc_swizzle(t, d);
+     if (key && !t->_vramOn) [cache setObject:t forKey:key];
++    __atomic_fetch_add(&nvmtl_fl[5], 1, __ATOMIC_RELAXED);   // <framelog>
+     nvlog("newTextureWithDescriptor:iosurface:%p plane:%lu -> %p (%zux%zu fmt %lu)",
+           (void *)surf, (unsigned long)plane, (__bridge void *)t, w, h, (unsigned long)d.pixelFormat);
+     return t; }
+diff -ru pa/plugin/NVMTLEventSync.m pb/plugin/NVMTLEventSync.m
+--- pa/plugin/NVMTLEventSync.m	2026-11-11 10:44:24
++++ pb/plugin/NVMTLEventSync.m	2026-11-15 01:21:34
+@@ -302,6 +302,23 @@
+         for (uint64_t m = atomic_load(&gMax); g > m && !atomic_compare_exchange_weak(&gMax, &m, g); ) ;
+         for (uint64_t m = atomic_load(&dMax); dn > m && !atomic_compare_exchange_weak(&dMax, &m, dn); ) ;
+     } else atomic_fetch_add(&untimed, 1);
++    // <framelog> every composite on its own line while /Library/GPUBundles/framelog-on exists (checked once a second):
++    // total, commit->GPU, GPU, end->done in us, parts, and what the main thread did since the previous composite: surface
++    // textures asked for (count, us), host imports (count, us), texture-barrier snapshot refreshes, textures really made.
++    {
++        extern uint64_t nvmtl_fl[8]; void nvlog_raw(const char *fmt, ...);
++        static _Atomic uint64_t chk; static _Atomic int on;
++        const uint64_t last_chk = atomic_load(&chk);
++        if (now - last_chk > 1000000000ull && atomic_compare_exchange_strong(&chk, &(uint64_t){last_chk}, now))
++            atomic_store(&on, access("/Library/GPUBundles/framelog-on", F_OK) == 0);
++        if (atomic_load(&on)) {
++            uint64_t f[6]; for (int i = 0; i < 6; i++) f[i] = __atomic_exchange_n(&nvmtl_fl[i], 0, __ATOMIC_RELAXED);
++            nvlog_raw("WSFRAME t=%llu total=%llu q=%llu g=%llu dn=%llu parts=%lu tex=%llu/%lluus imp=%llu/%lluus bar=%llu made=%llu",
++                      (unsigned long long)(now / 1000000ull), (unsigned long long)total, (unsigned long long)q, (unsigned long long)g,
++                      (unsigned long long)dn, (unsigned long)parts, (unsigned long long)f[0], (unsigned long long)(f[1] / 1000),
++                      (unsigned long long)f[2], (unsigned long long)(f[3] / 1000), (unsigned long long)f[4], (unsigned long long)f[5]);
++        }
++    }
+     if (total > 50000 && atomic_fetch_add(&logged, 1) < 8)
+         nvlog("WindowServer frame: %llu ms = commit->GPU start %llu ms + GPU %llu ms + GPU end->done %llu ms, %lu part(s)%s",
+               total / 1000, q / 1000, g / 1000, dn / 1000, (unsigned long)parts, gs > 0 ? "" : " (no GPU timing)");
+diff -ru pa/plugin/NVMTLObjects.m pb/plugin/NVMTLObjects.m
+--- pa/plugin/NVMTLObjects.m	2026-11-11 10:44:24
++++ pb/plugin/NVMTLObjects.m	2026-11-15 01:21:34
+@@ -3696,6 +3696,7 @@
+     [self setRenderPipelineState:saved];
+     _pass.load=oldLoad;
+     if (rc || !_begun) { [self nvmtlSamplePositionError:@"texture barrier: snapshot refresh/resume failed"]; return; }
++    { extern uint64_t nvmtl_fl[8]; __atomic_fetch_add(&nvmtl_fl[4], 1, __ATOMIC_RELAXED); }   // <framelog>
+     { static unsigned n; if (n++ < 8 || n % 5000 == 0) nvlog("CDX texture barrier refreshed current snapshot and resumed LOAD [%u so far]", n); }
+ }
+ - (void)textureBarrier { [self nvmtlRefreshSnapshotAtTextureBarrier]; }
+diff -ru pa/plugin/nvmtl_vk.c pb/plugin/nvmtl_vk.c
+--- pa/plugin/nvmtl_vk.c	2026-11-11 10:44:24
++++ pb/plugin/nvmtl_vk.c	2026-11-15 01:21:34
+@@ -6656,7 +6656,17 @@
+     }
+     return on;
+ }
++extern uint64_t nvmtl_fl[8];   // <framelog>
++static int nvmtl_vk_surface_host_import_inner(void *base, size_t alloc, nvk_buffer *out);
+ int nvmtl_vk_surface_host_import(void *base, size_t alloc, nvk_buffer *out)
++{
++    const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
++    const int r = nvmtl_vk_surface_host_import_inner(base, alloc, out);
++    __atomic_fetch_add(&nvmtl_fl[2], 1, __ATOMIC_RELAXED);
++    __atomic_fetch_add(&nvmtl_fl[3], clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0, __ATOMIC_RELAXED);
++    return r;
++}
++static int nvmtl_vk_surface_host_import_inner(void *base, size_t alloc, nvk_buffer *out)
+ {
+     memset(out, 0, sizeof *out);
+     if (!nvmtl_vk_surface_host_on() || !base) return -1;

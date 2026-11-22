@@ -15,8 +15,8 @@ at the first error, prints the end of the log, and keeps every log in /Volumes/P
   bash /Volumes/PKG/metal-stack/3-plugin.sh     Metal plugin + shader translator (5-15 min)
   bash /Volumes/PKG/metal-stack/4-kexts.sh      XeGfxAccel (macOS 15 variant), XeGfxAGDC, NMIntelFB, XeGfxIntelFB (2-5 min)
   bash /Volumes/PKG/metal-stack/5-collect.sh    copies the results to /Volumes/PKG/metal-stack/out + manifest
-  bash /Volumes/PKG/metal-stack/6-xgfbmove.sh   XgFbMove.kext into out (seconds)
-  bash /Volumes/PKG/metal-stack/7-xeflip.sh     XeGfxAccel 0.9.1: v0.0.47 + the Intel zero-copy flip (metal-stack/xeflip),
+  bash /Volumes/PKG/metal-stack/6-xgfbmove.sh   XgFbMove.kext into out (seconds; only for XeGfx 0.0.47, 0.0.48 moves the framebuffer itself)
+  bash /Volumes/PKG/metal-stack/7-xeflip.sh     XeGfxAccel 0.9.1: v0.0.48 + the Intel zero-copy flip (metal-stack/xeflip),
                                                 into out/kexts (the stock 0.9 stays in out/orig); about a minute.
                                                 Install: sudo bash .../install/update-kext.sh XeGfxAccel
   (a rerun of 5-collect.sh rebuilds out from the stock builds: run 6- and 7- again after it)
@@ -27,7 +27,7 @@ what it already installed under /usr/local stays and is kept out of these builds
 
 If a step fails: tell me which one; the log is on PKG and I read it from Windows. Rerunning a step is safe.
 
-What gets built (from WTLIntelGfx v0.0.47 = the XeGfx you run):
+What gets built (from WTLIntelGfx v0.0.48 = the XeGfx you run; the build sources are the same as v0.0.47's):
   XeGfxAccel.kext      Metal accelerator that WindowServer and Metal apps talk to
   XeGfxAGDC.kext       display-pipe service WindowServer needs
   NMIntelFB.kext       framebuffer for the built-in panel

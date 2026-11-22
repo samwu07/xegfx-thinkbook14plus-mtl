@@ -1,0 +1,187 @@
+--- a/src/intel/vulkan/anv_private.h
++++ b/src/intel/vulkan/anv_private.h
+@@ -477,6 +477,11 @@
+    /** True if this BO wraps a host pointer */
+    bool from_host_ptr:1;
+ 
++   /** A blank GEM object sent in this BO's place once its host pages are gone
++    * (i915/anv_batch_chain.c); 0 while they are good.
++    */
++   uint32_t host_ptr_stub;
++
+    /** True if this BO is mapped in the GTT (only used for RMV) */
+    bool gtt_mapped:1;
+ };
+--- a/src/intel/vulkan/anv_allocator.c
++++ b/src/intel/vulkan/anv_allocator.c
+@@ -2234,6 +2234,11 @@
+    else
+       memset(bo, 0, sizeof(*bo));
+ 
++   if (old_bo.host_ptr_stub) {
++      struct anv_bo stub = { .gem_handle = old_bo.host_ptr_stub };
++      device->kmd_backend->gem_close(device, &stub);
++   }
++
+    anv_bo_finish(device, &old_bo);
+ 
+    /* Don't unlock until we've actually closed the BO.  The whole point of
+--- a/src/intel/vulkan/i915/anv_batch_chain.c
++++ b/src/intel/vulkan/i915/anv_batch_chain.c
+@@ -30,6 +30,14 @@
+ #include "util/u_debug.h"
+ 
+ #include "drm-uapi/i915_drm.h"
++
++#ifdef __APPLE__
++#include <errno.h>
++#include <string.h>
++#include <os/log.h>
++#include "util/simple_mtx.h"
++#include "util/u_atomic.h"
++#endif
+ 
+ struct anv_execbuf {
+    struct drm_i915_gem_execbuffer2           execbuf;
+@@ -687,6 +695,74 @@
+    return VK_SUCCESS;
+ }
+ 
++#ifdef __APPLE__
++/* Host pages that still cannot be wired at execbuf time must not lose the
++ * device: anv lists every memory object in every execbuf, so one dead import
++ * would stop all GPU work in the process. Its place in the GPU's address space
++ * goes to a blank object of the same size (softpinned at the same address, the
++ * flags stay), so at worst that one resource reads zeros.
++ */
++static simple_mtx_t host_ptr_stub_lock = SIMPLE_MTX_INITIALIZER;
++static uint32_t host_ptr_stub_count;
++
++static void
++anv_execbuf_use_host_ptr_stubs(struct anv_device *device,
++                               struct drm_i915_gem_execbuffer2 *execbuf)
++{
++   if (!p_atomic_read(&host_ptr_stub_count))
++      return;
++
++   struct drm_i915_gem_exec_object2 *objects =
++      (void *)(uintptr_t)execbuf->buffers_ptr;
++   for (uint32_t i = 0; i < execbuf->buffer_count; i++) {
++      struct anv_bo *bo = anv_device_lookup_bo(device, objects[i].handle);
++      if (bo->from_host_ptr && bo->host_ptr_stub)
++         objects[i].handle = bo->host_ptr_stub;
++   }
++}
++
++/* true if at least one object was newly replaced, so the execbuf is worth retrying */
++static bool
++anv_execbuf_stub_lost_host_ptrs(struct anv_device *device,
++                                struct drm_i915_gem_execbuffer2 *execbuf)
++{
++   struct drm_i915_gem_exec_object2 *objects =
++      (void *)(uintptr_t)execbuf->buffers_ptr;
++   bool replaced = false;
++
++   simple_mtx_lock(&host_ptr_stub_lock);
++   for (uint32_t i = 0; i < execbuf->buffer_count; i++) {
++      struct anv_bo *bo = anv_device_lookup_bo(device, objects[i].handle);
++      if (!bo->from_host_ptr || bo->host_ptr_stub)
++         continue;
++
++      /* i915 wires a userptr for SET_DOMAIN: EFAULT here names the bad one */
++      struct drm_i915_gem_set_domain probe = {
++         .handle = bo->gem_handle,
++         .read_domains = I915_GEM_DOMAIN_CPU,
++         .write_domain = I915_GEM_DOMAIN_CPU,
++      };
++      if (!intel_ioctl(device->fd, DRM_IOCTL_I915_GEM_SET_DOMAIN, &probe) ||
++          errno != EFAULT)
++         continue;
++
++      struct drm_i915_gem_create create = { .size = bo->size };
++      if (intel_ioctl(device->fd, DRM_IOCTL_I915_GEM_CREATE, &create)) {
++         os_log_error(OS_LOG_DEFAULT, "xegfx anv: no blank object for lost host pointer %p (+%llu): %{public}s",
++                      bo->map, (unsigned long long)bo->size, strerror(errno));
++         continue;
++      }
++      bo->host_ptr_stub = create.handle;
++      p_atomic_inc(&host_ptr_stub_count);
++      replaced = true;
++      os_log_error(OS_LOG_DEFAULT, "xegfx anv: host pointer %p (+%llu) lost its pages; a blank object takes its place [%u so far]",
++                   bo->map, (unsigned long long)bo->size, p_atomic_read(&host_ptr_stub_count));
++   }
++   simple_mtx_unlock(&host_ptr_stub_lock);
++   return replaced;
++}
++#endif
++
+ #define anv_gem_execbuffer(q, e) anv_gem_execbuffer_impl((q), (e), __func__, __LINE__)
+ 
+ static VkResult
+@@ -696,7 +772,18 @@
+ {
+    struct anv_device *device = queue->device;
+ 
++#ifdef __APPLE__
++   anv_execbuf_use_host_ptr_stubs(device, execbuf);
++#endif
+    int ret = i915_gem_execbuf_ioctl(device->fd, device->info, execbuf);
++#ifdef __APPLE__
++   for (int tries = 0; ret && errno == EFAULT && tries < 3; tries++) {
++      if (!anv_execbuf_stub_lost_host_ptrs(device, execbuf))
++         break;
++      anv_execbuf_use_host_ptr_stubs(device, execbuf);
++      ret = i915_gem_execbuf_ioctl(device->fd, device->info, execbuf);
++   }
++#endif
+    if (ret) {
+       return anv_queue_set_lost(queue, errno, "%s(%d) failed: %m", func, line);
+    }
+--- a/src/intel/vulkan/i915/anv_kmd_backend.c
++++ b/src/intel/vulkan/i915/anv_kmd_backend.c
+@@ -22,6 +22,12 @@
+  */
+ 
+ #include <sys/mman.h>
++#ifdef __APPLE__
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++#include <os/log.h>
++#endif
+ 
+ #include "anv_private.h"
+ 
+@@ -331,6 +337,32 @@
+    int ret = intel_ioctl(device->fd, DRM_IOCTL_I915_GEM_USERPTR, &userptr);
+    if (ret == -1)
+       return 0;
++
++#ifdef __APPLE__
++   /* i915 wires a userptr's pages on first use, and anv puts every memory
++    * object into every execbuf, used or not. WindowServer imports small
++    * buffers (newBufferWithBytesNoCopy) and can unmap them before that first
++    * use: the next execbuf of any work on the device then fails with EFAULT
++    * and the device is lost (2026-11-04 and -05, WindowServer crashed both
++    * times). Wire them now, as Apple's drivers do when a no-copy buffer is
++    * made; wired pages survive the unmap. If they cannot be wired, refuse the
++    * import: the caller copies instead.
++    */
++   if (!getenv("XEGFX_ANV_NO_IMPORT_WIRE")) {
++      struct drm_i915_gem_set_domain wire = {
++         .handle = userptr.handle,
++         .read_domains = I915_GEM_DOMAIN_CPU,
++         .write_domain = I915_GEM_DOMAIN_CPU,
++      };
++      if (intel_ioctl(device->fd, DRM_IOCTL_I915_GEM_SET_DOMAIN, &wire)) {
++         struct drm_gem_close close = { .handle = userptr.handle };
++         os_log_error(OS_LOG_DEFAULT, "xegfx anv: host pointer %p (+%llu) cannot be wired, import refused: %{public}s",
++                      mem, (unsigned long long)size, strerror(errno));
++         intel_ioctl(device->fd, DRM_IOCTL_GEM_CLOSE, &close);
++         return 0;
++      }
++   }
++#endif
+ 
+    return userptr.handle;
+ }

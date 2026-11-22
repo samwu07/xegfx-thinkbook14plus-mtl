@@ -1,6 +1,6 @@
 #!/bin/bash
 # 1-fetch.sh -- sources at pinned revisions into ~/src (APFS, never the exFAT PKG volume):
-#   WTLIntelGfx v0.0.47, libdrm and Mesa at the commits upstream's userland/BUILD.md built, Vulkan-Headers v1.4.328,
+#   WTLIntelGfx v0.0.48, libdrm and Mesa at the commits upstream's userland/BUILD.md built, Vulkan-Headers v1.4.328,
 #   NVIDIA open-gpu-kernel-modules 615.78.08 (headers the accelerator compiles against).
 #   bash /Volumes/PKG/metal-stack/1-fetch.sh
 . "$(dirname "$0")/common.sh"

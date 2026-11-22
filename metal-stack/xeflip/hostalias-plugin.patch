@@ -1,0 +1,106 @@
+--- pa/plugin/NVMTLObjects.h
++++ pb/plugin/NVMTLObjects.h
+@@ -284,7 +284,8 @@
+ @interface NVMTLHeap () { @public MTLHazardTrackingMode _hazard; } @end
+ @interface NVMTLIndirectCommandBuffer () { @public MTLResourceOptions _opts; } @end
+ @interface NVMTLBuffer () { @public uint32_t _purge; } @end
+-@interface NVMTLBuffer () { @public BOOL _hostGone; } @end   // the caller's pages behind _hostPtr were unmapped (nvmtl_host_readable)
++@interface NVMTLBuffer () { @public BOOL _hostGone; } @end
++@interface NVMTLBuffer () { @public uint64_t _hostAlias; uint64_t _hostAliasLen; int _hostAliasProt; } @end   // our own mapping of the caller's pages (nvmtl_host_alias)   // the caller's pages behind _hostPtr were unmapped (nvmtl_host_readable)
+ @interface NVMTLTexture () { @public uint32_t _purge; } @end
+ @interface NVMTLHeap () { @public uint32_t _purge; } @end
+ #include <os/lock.h>
+--- pa/plugin/NVMTLObjects.m
++++ pb/plugin/NVMTLObjects.m
+@@ -56,6 +56,7 @@
+ 
+ @class NVMTLBuffer;
+ static void nvmtl_buffer_sync_in(NVMTLBuffer *b);
++static void nvmtl_host_alias_free(NVMTLBuffer *b);
+ @class NVMTLCommandBuffer;
+ static void nvmtl_buffer_sync_out(NVMTLBuffer *b);
+ static void nvbt(const char *tag, int *count, int max) {
+@@ -942,6 +943,7 @@
+     for (uint32_t k = 0; k < _nbpk; k++) nvmtl_vk_image_destroy(&_bpk[k].img);
+     free(_bpk); _bpk = NULL; _nbpk = 0;
+     nvmtl_vk_buffer_retire(&_b); if (_shadow.buf) nvmtl_vk_buffer_retire(&_shadow);
++    nvmtl_host_alias_free(self);   // <xegfx> before the deallocator: the caller may free the pages there
+     if (_subHeap) { NVMTLHeap *h = _subHeap; NSUInteger c = _subCharge; _subHeap = nil; _subCharge = 0;
+                     if (_subPlaced && c) { _subPlaced = NO; [h nvmtlGiveRange:_heapOffset length:c]; }
+                     [h nvmtlReleaseSubAllocation:c]; }
+@@ -6075,18 +6077,52 @@
+     static unsigned n; if (n++ < 8 || n % 1000 == 0)
+         nvlog("buffer: the caller unmapped the %zu bytes at %p behind a live no-copy buffer; it keeps its last bytes [%u so far]", b->_hostLen, b->_hostPtr, n);
+     return 0;
++}
++// 2026-11-20 14:36: the check above was not enough. WindowServer's main thread freed an 18.7 MB Core Animation buffer
++// (CA::Render::Shmem, mach_vm_deallocate) while this queue was in the middle of copying from it: the pages passed the
++// check and were gone a moment later. So the copies no longer read through the caller's address at all. The first one
++// maps the same pages a second time into our own range (mach_vm_remap, no copy, shared); a later unmap by the caller
++// leaves our mapping and its pages in place, so a copy can never fault. The remap is atomic: it either takes the pages
++// or fails because they are already gone. Our mapping lives as long as the buffer. Caller writes reach us (same pages).
++static void *nvmtl_host_alias(NVMTLBuffer *b)
++{
++    if (b->_hostAlias) return (void *)(uintptr_t)b->_hostAlias;
++    if (b->_hostGone || !b->_hostPtr || !b->_hostLen) return NULL;
++    const mach_vm_address_t src = (mach_vm_address_t)(uintptr_t)b->_hostPtr, pg = src & ~(mach_vm_address_t)vm_page_mask;
++    const mach_vm_size_t len = ((src + b->_hostLen + vm_page_mask) & ~(mach_vm_address_t)vm_page_mask) - pg;
++    mach_vm_address_t a = 0; vm_prot_t cur = 0, max = 0;
++    const kern_return_t kr = mach_vm_remap(mach_task_self(), &a, len, 0, VM_FLAGS_ANYWHERE, mach_task_self(), pg, FALSE,
++                                           &cur, &max, VM_INHERIT_NONE);
++    if (kr != KERN_SUCCESS || !(cur & VM_PROT_READ)) {
++        if (kr == KERN_SUCCESS) mach_vm_deallocate(mach_task_self(), a, len);
++        b->_hostGone = YES;
++        static unsigned n; if (n++ < 8 || n % 1000 == 0)
++            nvlog("buffer: the %zu bytes at %p behind a live no-copy buffer could not be mapped (%d); it keeps its last bytes [%u so far]", b->_hostLen, b->_hostPtr, kr, n);
++        return NULL;
++    }
++    b->_hostAliasLen = len; b->_hostAliasProt = cur;
++    b->_hostAlias = a + (src - pg);
++    static unsigned n; if (n++ < 4) nvlog("buffer: %zu caller bytes at %p mapped again at %p for the copies", b->_hostLen, b->_hostPtr, (void *)(uintptr_t)b->_hostAlias);
++    return (void *)(uintptr_t)b->_hostAlias;
+ }
++static void nvmtl_host_alias_free(NVMTLBuffer *b)
++{
++    if (!b->_hostAlias) return;
++    mach_vm_deallocate(mach_task_self(), b->_hostAlias & ~(uint64_t)vm_page_mask, b->_hostAliasLen);
++    b->_hostAlias = 0; b->_hostAliasLen = 0;
++}
+ // </xegfx>
+ static void nvmtl_buffer_sync_in(NVMTLBuffer *b)
+ {
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
+-    if (!nvmtl_host_readable(b)) return;
++    if (!b->_hostAlias && !nvmtl_host_readable(b)) return;
++    char *host = nvmtl_host_alias(b);   // the caller's bytes through our own mapping (see above)
++    if (!host) return;
+     const uint64_t t0 = nvmtl_perf_now();
+-    if (b->_rowSource) {
+-        void *host = [b->_rowSource contents]; if (!host) return;
++    if (b->_rowSource) {   // _hostPtr is the source's contents + _rowSourceOff, so row y starts at host + y * pitch
+         for (size_t y=0; y<b->_rowCount; ++y)
+-            memcpy((char *)b->_b.map+y*b->_rowGPUPitch, (char *)host+b->_rowSourceOff+y*b->_rowHostPitch, b->_rowBytes);
+-    } else memcpy(b->_b.map, b->_hostPtr, b->_hostLen);
++            memcpy((char *)b->_b.map+y*b->_rowGPUPitch, host+y*b->_rowHostPitch, b->_rowBytes);
++    } else memcpy(b->_b.map, host, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCIN, t0, b->_hostLen);
+ }
+ 
+@@ -6098,12 +6134,13 @@
+         return;
+     }
+     if (!b || !b->_hostPtr || !b->_b.map || !b->_hostLen) return;
+-    if (b->_hostGone || !nvmtl_host_range_ok(b->_hostPtr, b->_hostLen, VM_PROT_READ | VM_PROT_WRITE)) return;
++    if (b->_hostGone || (!b->_hostAlias && !nvmtl_host_range_ok(b->_hostPtr, b->_hostLen, VM_PROT_READ | VM_PROT_WRITE))) return;
++    char *host = nvmtl_host_alias(b);
++    if (!host || !(b->_hostAliasProt & VM_PROT_WRITE)) return;   // read-only caller pages: nothing to copy back into
+     const uint64_t t0 = nvmtl_perf_now();
+     if (b->_rowSource) {
+-        void *host = [b->_rowSource contents]; if (!host) return;
+         for (size_t y=0; y<b->_rowCount; ++y)
+-            memcpy((char *)host+b->_rowSourceOff+y*b->_rowHostPitch, (char *)b->_b.map+y*b->_rowGPUPitch, b->_rowBytes);
+-    } else memcpy(b->_hostPtr, b->_b.map, b->_hostLen);
++            memcpy(host+y*b->_rowHostPitch, (char *)b->_b.map+y*b->_rowGPUPitch, b->_rowBytes);
++    } else memcpy(host, b->_b.map, b->_hostLen);
+     nvmtl_perf_note(NVP_SYNCOUT, t0, b->_hostLen);
+ }

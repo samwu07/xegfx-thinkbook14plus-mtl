@@ -11,13 +11,17 @@
 # from or back to the caller's pages, which may be unmapped or read-only.
 # Also xeflip/renderfix-plugin.patch (jxy333967, issue 2): texture barriers refresh the self-read snapshot (missing
 # corners, see-through translucency, colour blocks), and pitched read-only CPU views.
+# Also xeflip/barrier-region-plugin.patch: a texture barrier copies only what the pass drew since the last copy
+# (off: /Library/GPUBundles/nobarrierregion). Also xeflip/framelog-plugin.patch: one WSFRAME line per composite while /Library/GPUBundles/framelog-on exists.
+# Also xeflip/hostalias-plugin.patch (2026-11-20 14:36 WindowServer crash): copied no-copy buffers read and write the
+# caller's pages through the plugin's own mapping of them, so a caller freeing them mid-copy cannot fault the copy.
 # Seconds; in a boot where the stages have not run (4-kexts.sh's rule).
 #   bash /Volumes/PKG/metal-stack/9-wsmark-plugin.sh
 #   sudo bash /Volumes/PKG/metal-stack/desktop/update-plugin.sh      then restart (WindowServer loads it at start)
 . "$(dirname "$0")/common.sh"
 no_xegfx
-S="$HERE/xeflip/wsmark-plugin.patch"; S2="$HERE/xeflip/hostsync-plugin.patch"; S3="$HERE/xeflip/renderfix-plugin.patch"; P="$SRC/NVMTL-wsmark"; O="$HERE/out"; B="$OUTROOT/wsmark"
-[ -f "$S" ] && [ -f "$S2" ] && [ -f "$S3" ] || { echo "missing $S, $S2 or $S3"; exit 1; }
+S="$HERE/xeflip/wsmark-plugin.patch"; S2="$HERE/xeflip/hostsync-plugin.patch"; S3="$HERE/xeflip/renderfix-plugin.patch"; S4="$HERE/xeflip/framelog-plugin.patch"; S5="$HERE/xeflip/barrier-region-plugin.patch"; S6="$HERE/xeflip/surfpin-plugin.patch"; S7="$HERE/xeflip/hostalias-plugin.patch"; P="$SRC/NVMTL-wsmark"; O="$HERE/out"; B="$OUTROOT/wsmark"
+[ -f "$S" ] && [ -f "$S2" ] && [ -f "$S3" ] && [ -f "$S4" ] && [ -f "$S5" ] && [ -f "$S6" ] && [ -f "$S7" ] || { echo "missing $S, $S2 or $S3"; exit 1; }
 [ -f "$WTL/build/build_plugin.sh" ] || { echo "run 1-fetch.sh first"; exit 1; }
 [ -f "$O/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver" ] || { echo "run 3-plugin.sh and 5-collect.sh first"; exit 1; }
 
@@ -25,7 +29,7 @@ prepare() {
   rm -rf "$P"; mkdir -p "$P/build"
   ditto --norsrc --noextattr "$WTL/plugin" "$P/plugin"
   cp "$WTL/build/build_plugin.sh" "$P/build/"
-  (cd "$P" && patch -p1 -N < "$S" && patch -p1 -N < "$S2" && patch -p1 -N < "$S3")
+  (cd "$P" && patch -p1 -N < "$S" && patch -p1 -N < "$S2" && patch -p1 -N < "$S3" && patch -p1 -N < "$S4" && patch -p1 -N < "$S5" && patch -p1 -N < "$S6" && patch -p1 -N < "$S7")
   echo "wsmark hooks in nvmtl_vk.c: $(grep -c 'nvmtl_xgdr_gpu_mark' "$P/plugin/nvmtl_vk.c") (want 2)"
   [ "$(grep -c 'nvmtl_xgdr_gpu_mark' "$P/plugin/nvmtl_vk.c")" = 2 ]
 }
@@ -36,6 +40,10 @@ build() {
   strings "$B/plugin/NVMTLDriver" | grep "WindowServer marks: on the accelerator" > /dev/null || { echo "the binary has no wsmark code"; return 1; }
   strings "$B/plugin/NVMTLDriver" | grep "behind a live no-copy buffer" > /dev/null || { echo "the binary has no hostsync code"; return 1; }
   strings "$B/plugin/NVMTLDriver" | grep "refreshed current snapshot" > /dev/null || { echo "the binary has no renderfix code"; return 1; }
+  strings "$B/plugin/NVMTLDriver" | grep "WSFRAME t=" > /dev/null || { echo "the binary has no framelog code"; return 1; }
+  strings "$B/plugin/NVMTLDriver" | grep "nobarrierregion" > /dev/null || { echo "the binary has no barrier-region code"; return 1; }
+  strings "$B/plugin/NVMTLDriver" | grep "nosurfpin" > /dev/null || { echo "the binary has no surface-pin code"; return 1; }
+  strings "$B/plugin/NVMTLDriver" | grep "mapped again at" > /dev/null || { echo "the binary has no hostalias code"; return 1; }
 }
 collect() {
   local M="$O/GPUBundles/NVMTLDriver.bundle/Contents/MacOS"

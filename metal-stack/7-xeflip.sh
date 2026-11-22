@@ -1,5 +1,5 @@
 #!/bin/bash
-# 7-xeflip.sh -- XeGfxAccel with the Intel zero-copy flip (metal-stack/xeflip, see xeflip_glue.inc): the v0.0.47
+# 7-xeflip.sh -- XeGfxAccel with the Intel zero-copy flip (metal-stack/xeflip, see xeflip_glue.inc): the v0.0.48
 # accelerator source plus xeflip.patch, built with upstream's command line for macOS 15 (as 4-kexts.sh does), as
 # version 0.9.1, into /Volumes/PKG/metal-stack/out/kexts/XeGfxAccel.kext. The stock build is kept in out/orig/ (once).
 # The flip is off until `sysctl debug.nvaccel_xeflip=1` (desktop/xeflip.sh), so 0.9.1 otherwise behaves as 0.9.
@@ -11,7 +11,7 @@ no_xegfx
 S="$HERE/xeflip"; P="$SRC/XeGfxAccel-xeflip"; O="$HERE/out"
 [ -f "$S/xeflip.patch" ] && [ -f "$S/gpufb.patch" ] && [ -f "$S/wsmark.patch" ] && [ -f "$S/backlight.patch" ] && [ -f "$S/xeflip_core.h" ] && [ -f "$S/xeflip_glue.inc" ] || { echo "missing sources in $S"; exit 1; }
 [ -f "$WTL/build/build_xegfxaccel.sh" ] || { echo "run 1-fetch.sh first"; exit 1; }
-[ "$(git -C "$WTL" rev-parse HEAD)" = "$WTL_REV" ] || { echo "$WTL is not at v0.0.47 ($WTL_REV): xeflip.patch is made for that source"; exit 1; }
+[ "$(git -C "$WTL" rev-parse HEAD)" = "$WTL_REV" ] || { echo "$WTL is not at $WTL_TAG ($WTL_REV): xeflip.patch is made for that source"; exit 1; }
 [ -d "$O/kexts" ] || { echo "run 5-collect.sh first"; exit 1; }
 [ -d "$OGKM/src/nvidia/generated" ] || { echo "run 1-fetch.sh first (NVIDIA headers)"; exit 1; }
 export OUTROOT=$OUTROOT/kexts OGKM SDKROOT

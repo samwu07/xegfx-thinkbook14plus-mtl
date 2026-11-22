@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-metal.sh -- first Metal test on the Intel GPU, after install-metal.sh, a restart, and
 #   sudo bash /Volumes/PKG/xegfx/run-xegfx-stages.sh 7      (stage 7 hands the GPU to XeGfxAccel)
-# Builds upstream's userland/tools/mtlprobe.m (v0.0.47) once, then runs it with NM_TEST_PLUGIN: the plugin is loaded
+# Builds upstream's userland/tools/mtlprobe.m (v0.0.48) once, then runs it with NM_TEST_PLUGIN: the plugin is loaded
 # into mtlprobe only, on the NMXAccel service. mtlprobe compiles an MSL compute kernel, fills a buffer on the GPU and
 # checks it on the CPU, then draws; exit 0 only when the values are right.
 #   bash /Volumes/PKG/metal-stack/install/test-metal.sh        (your normal user, no sudo)

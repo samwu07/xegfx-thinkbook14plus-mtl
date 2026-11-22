@@ -3,7 +3,7 @@ Licences in this repository
 Everything written for this repository (scripts, xgfbmove/, fbreloc/, xeflip_core.h, xeflip_glue.inc, opencore/,
 ggtt-*.py, documentation) is under the BSD 2-Clause licence in LICENSE.
 
-Patches modify upstream WTLIntelGfx (https://github.com/watchthelight-labs/WTLIntelGfx, commit a3fd73ed, tag v0.0.47)
+Patches modify upstream WTLIntelGfx (https://github.com/watchthelight-labs/WTLIntelGfx, commit 972d75a3, tag v0.0.48; the files they change are the same in v0.0.47, a3fd73ed)
 and keep the licence of the code they change:
 
   metal-stack/xeflip/xeflip.patch, metal-stack/xeflip/gpufb.patch, metal-stack/xeflip/wsmark.patch,
@@ -13,7 +13,9 @@ and keep the licence of the code they change:
       shared under the same terms: no commercial use. Copyright of the patched code: NullMoth Systems, watchthelight.
       Full text: licenses/PolyForm-Noncommercial-1.0.0.md (upstream has no "Required Notice:" lines).
   metal-stack/xeflip/wsmark-plugin.patch, metal-stack/xeflip/hostsync-plugin.patch,
-  metal-stack/xeflip/renderfix-plugin.patch
+  metal-stack/xeflip/renderfix-plugin.patch, metal-stack/xeflip/framelog-plugin.patch,
+  metal-stack/xeflip/barrier-region-plugin.patch, metal-stack/xeflip/surfpin-plugin.patch,
+  metal-stack/xeflip/hostalias-plugin.patch
       change plugin/ (the NVMTLDriver Metal plugin, NullMoth Systems, SPDX PolyForm-Noncommercial-1.0.0): same terms,
       no commercial use. renderfix-plugin.patch is jxy333967's render-barrier and row-pitch fix
       (https://github.com/samwu07/xegfx-thinkbook14plus-mtl/issues/2, source jxy333967/jianxunyun@dfeaac89c81a),
@@ -24,6 +26,10 @@ and keep the licence of the code they change:
   metal-stack/xeintelfb/bootvram.patch
       changes kexts/XeGfxIntelFB, BSD 2-Clause, Copyright (c) 2026, watchthelight.
       Full text: licenses/WTLIntelGfx-LICENSE-BSD-2-Clause.txt.
+  metal-stack/xemesa/hostptr-mesa.patch
+      changes Mesa's Intel Vulkan driver (ANV) as WTLIntelGfx's userland/ builds it, which is under the MIT licence
+      (copyright Intel Corporation and the Mesa contributors): the patch is shared under the same MIT terms.
+      Full text: release/LICENSES/Mesa-MIT.txt.
 
 touchpad/patches/ are changes to GPL code and keep its licence: VoodooI2C and its VoodooI2CHID satellite (GPL-3.0, the satellite
 has no licence file of its own and belongs to the VoodooI2C project), VoodooInput (GPL-2.0, acidanthera). Texts in

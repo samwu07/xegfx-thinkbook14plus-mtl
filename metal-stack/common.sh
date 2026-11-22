@@ -19,7 +19,8 @@ MP=/opt/local                    # MacPorts
 LLVM_CONFIG=$MP/libexec/llvm-20/bin/llvm-config
 SPIRVLLVM=$HOME/.local/nvgfx-llvm  # SPIRV-LLVM-Translator for LLVM 20.1 (Mesa's mesa_clc needs LLVMSPIRVLib 20.1.x)
 
-WTL_REV=a3fd73ed68ae82af7d3c6a80ec4336507e944ed7    # tag v0.0.47: the XeGfx.kext in OpenCore CLEAN-07F
+WTL_REV=972d75a30c1bc95c6b68987190072840de1d6b02    # tag v0.0.48 (was v0.0.47 a3fd73ed): the XeGfx.kext in the EFI
+WTL_TAG=v0.0.48
 DRM_REV=b97cbde15c5c3abfe44d78e8f57139e50f612fec    # userland/BUILD.md
 MESA_REV=bffd91947efc1932da99aca69fc540d6d4201b0c   # userland/BUILD.md (26.3.0-devel)
 VK_TAG=v1.4.328
@@ -49,7 +50,11 @@ if xcode-select -p >/dev/null 2>&1; then export SDKROOT=$(pick_sdk); fi
 # understood, the builds refuse a boot where FbRelocate ran (its fbreloc-load variable exists) or XeGfx is loaded.
 # ALLOW_FBRELOC=1 overrides the FbRelocate check.
 no_xegfx() {
-  if kmutil showloaded --list-only 2>/dev/null | grep -F "org.watchthelight.XeGfx (" > /dev/null; then   # no -q: SIGPIPE + pipefail
+  # ALLOW_XEGFX=1 builds anyway when FbRelocate did not run (CLEAN-07Y): the panic's suspect is FbRelocate's page, and
+  # XeGfx being loaded is only the precaution. A panic would cost a restart, not files.
+  if [ -n "${ALLOW_XEGFX:-}" ] && ! nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:fbreloc-load >/dev/null 2>&1; then
+    echo "ALLOW_XEGFX=1: building with XeGfx loaded (no FbRelocate in this boot)" >&2
+  elif kmutil showloaded --list-only 2>/dev/null | grep -F "org.watchthelight.XeGfx (" > /dev/null; then   # no -q: SIGPIPE + pipefail
     echo "XeGfx is loaded in this boot (the stages ran). Restart into CLEAN-07A before building." >&2
     exit 3
   fi

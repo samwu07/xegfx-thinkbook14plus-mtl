@@ -36,8 +36,9 @@ snap() {   # $1 = label; everything is written and synced before the next stage 
   nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:fbreloc-load | sed 's/%00//g'; } > "$OUT/system.txt" 2>&1
 # exact id: XeGfx is not XeGfxAccel. No grep -q: it stops reading early, kmutil dies of SIGPIPE, pipefail says "not loaded"
 loaded() { kmutil showloaded --list-only 2>/dev/null | grep -E "$1 \(" > /dev/null; }
-# The boot framebuffer must be out of i915's GuC area before stage 4 (WTLIntelGfx issue #13). XgFbMove.kext
-# (metal-stack/install) moves it from macOS, once, before XeGfx is loaded; it replaced FbRelocate.efi.
+# The boot framebuffer must be out of i915's GuC area before stage 4 (WTLIntelGfx issue #13). XeGfx 0.0.48 moves it
+# itself in stage 4 (see stage4-move-in-kext below). For 0.0.47: XgFbMove.kext (metal-stack/install) moves it from
+# macOS, once, before XeGfx is loaded; it replaced FbRelocate.efi.
 if [ -d /Library/Extensions/XgFbMove.kext ]; then
   if loaded 'org\.watchthelight\.XeGfx'; then
     echo "XeGfx is already loaded in this boot, so XgFbMove is not run (it only moves before XeGfx)"
@@ -83,7 +84,10 @@ for s in $(seq 1 "$TARGET"); do
   # memory (the band). A framebuffer still in the GuC area now stops the run here, before i915 touches anything.
   if [ "$s" = 4 ]; then
     fbplace > "$OUT/fb-placement-before-stage4.txt"
-    if grep -E '^  -> (crosses|inside)' "$OUT/fb-placement-before-stage4.txt" > /dev/null; then
+    # /Library/XeGfx/stage4-move-in-kext (sudo touch): XeGfx 0.0.48 and later move the framebuffer themselves inside
+    # stage 4 (WTLIntelGfx PR #16), so the check above would stop a run that is about to be fixed. With 0.0.48, park
+    # XgFbMove.kext (move it out of /Library/Extensions) and touch this file. This machine: since 2026-11-13.
+    if [ ! -e /Library/XeGfx/stage4-move-in-kext ] && grep -E '^  -> (crosses|inside)' "$OUT/fb-placement-before-stage4.txt" > /dev/null; then
       cat "$OUT/fb-placement-before-stage4.txt"
       echo "STOPPED before stage 4: the framebuffer was not moved out of the GuC area ($(sed -E 's/.*status (-?[0-9]+).*/XgFbMove status \1/' "$OUT/xgfbmove.txt" 2>/dev/null))." >&2
       echo "Stage 4 would draw the band. Nothing has been changed yet; send me $OUT, then restart." >&2

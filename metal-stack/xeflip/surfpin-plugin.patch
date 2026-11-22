@@ -1,0 +1,55 @@
+diff -ru pa/plugin/NVMTLDevice.m pb/plugin/NVMTLDevice.m
+--- pa/plugin/NVMTLDevice.m	2026-11-15 10:22:06
++++ pb/plugin/NVMTLDevice.m	2026-11-15 10:22:29
+@@ -1068,6 +1068,34 @@
+ // <framelog> counters read by the WindowServer frame log (nvmtl_ws_frame_diag): 0 surface textures asked for, 1 their wall
+ // time in ns (lock wait included), 2 host imports, 3 their ns, 4 texture-barrier snapshot refreshes, 5 textures really created.
+ uint64_t nvmtl_fl[12];   // 6 barrier pixels copied, 7 what a full copy would have been, 8 barriers that copied nothing, 9 pass-start full copies
++// <surfpin> The cache above is weak: when the application drops its last wrapper of a surface the backing (host import of the
++// surface's pages, wired, plus the image over it) is destroyed, and the next frame that wraps the same surface again (a
++// compositor does this every frame for a swapchain's few surfaces) pays the import again: ~5 ms of the main thread and ~8 ms
++// of GPU per composite measured in WindowServer. So the most recent backings are also held strongly, within a byte and a
++// count budget (the pinned backing keeps its IOSurface retained, so the surface ID cannot be reused while it is cached).
++// /Library/GPUBundles/nosurfpin turns it off (checked once a second). Always called with @synchronized(device) held.
++static NSMutableArray *g_surf_pin; static size_t g_surf_pin_bytes;
++static int nvmtl_surfpin_on(void) {
++    static _Atomic uint64_t chk; static _Atomic int on = 1;
++    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), last = atomic_load(&chk);
++    if (now - last > 1000000000ull && atomic_compare_exchange_strong(&chk, &(uint64_t){last}, now))
++        atomic_store(&on, access("/Library/GPUBundles/nosurfpin", F_OK) != 0);
++    return atomic_load(&on);
++}
++static void nvmtl_surf_pin(NVMTLTexture *t) {
++    if (!t || !t->_surf || !nvmtl_surfpin_on()) return;
++    if (!g_surf_pin) g_surf_pin = [NSMutableArray new];
++    const NSUInteger i = [g_surf_pin indexOfObjectIdenticalTo:t];
++    if (i != NSNotFound) { [g_surf_pin removeObjectAtIndex:i]; [g_surf_pin addObject:t]; return; }
++    [g_surf_pin addObject:t]; g_surf_pin_bytes += IOSurfaceGetAllocSize(t->_surf);
++    while (g_surf_pin.count > 1 && (g_surf_pin.count > 48 || g_surf_pin_bytes > (384u << 20))) {
++        NVMTLTexture *old = g_surf_pin[0];
++        g_surf_pin_bytes -= old->_surf ? IOSurfaceGetAllocSize(old->_surf) : 0;
++        [g_surf_pin removeObjectAtIndex:0];
++    }
++    static unsigned n; if (n++ < 8 || n % 2000 == 0)
++        nvlog("surface pin: %lu backings held, %zu MB", (unsigned long)g_surf_pin.count, g_surf_pin_bytes >> 20);
++}
+ - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)surf plane:(NSUInteger)plane {
+     const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+     id<MTLTexture> r;
+@@ -1100,6 +1128,7 @@
+     // whether a wrapper reads it or writes it (the image is made writable).
+     // Weak entries do not pin the image after the application's last wrapper.
+     if (backing && !backing->_vramOn) {
++        nvmtl_surf_pin(backing);   // <surfpin> a hit keeps it among the most recent
+         NVMTLTexture *alias = (NVMTLTexture *)[backing newTextureViewWithPixelFormat:d.pixelFormat];
+         if (alias) {
+             alias->_viewParent = nil; alias->_usage = d.usage; alias->_ropt = t->_ropt; alias->_fbo = t->_fbo;
+@@ -1116,7 +1145,7 @@
+     t->_stex = t->_i.storage != 0;
+     t->_usage = d.usage;
+     nvmtl_texture_desc_swizzle(t, d);
+-    if (key && !t->_vramOn) [cache setObject:t forKey:key];
++    if (key && !t->_vramOn) { [cache setObject:t forKey:key]; nvmtl_surf_pin(t); }
+     __atomic_fetch_add(&nvmtl_fl[5], 1, __ATOMIC_RELAXED);   // <framelog>
+     nvlog("newTextureWithDescriptor:iosurface:%p plane:%lu -> %p (%zux%zu fmt %lu)",
+           (void *)surf, (unsigned long)plane, (__bridge void *)t, w, h, (unsigned long)d.pixelFormat);

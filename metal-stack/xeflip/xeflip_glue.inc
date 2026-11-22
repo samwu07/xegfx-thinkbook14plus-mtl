@@ -1,4 +1,4 @@
-// <xeflip> Zero-copy scan-out on the Intel panel: a local addition to WTLIntelGfx v0.0.47 (ThinkBook 14+ 155H, 7D55).
+// <xeflip> Zero-copy scan-out on the Intel panel: a local addition to WTLIntelGfx v0.0.47-v0.0.48 (ThinkBook 14+ 155H, 7D55).
 // Included by nvrm-accel.cpp inside its NMX_XEGFX block, after nvXeWaitVblank. The hardware half (plane checks, GGTT
 // slots, PLANE_SURF and its latch) is xeflip_core.h, tested on the host by work/xeflip/test_xeflip.py.
 //

@@ -53,6 +53,10 @@ Zero-copy flip, 2026-11-03 01:09 (xeflip.sh try): 0 flips, 351 copied, reason -5
   b5000000 b9800000; mapping a new surface ~13 ms (once per surface, 3 surfaces), latch 4-10 ms. In that boot the holes
   WERE cleared (scratch 20000872390001, map mostly '.'); the 01:09 boot had stale data. 0.9.3 takes either.
 
+An app opens no window on the Intel desktop (2026-11-04): bash desktop/gpu-app.sh /Applications/App.app -- finds its
+  process name, tests it with the GPU, re-signs a sandboxed ad-hoc app without the sandbox (asks; backup in
+  ~/GPUApp-backups), adds its allow-list line and checks it. App Store sandboxed apps are refused. --undo reverses.
+
 Autostart (2026-11-03): every CLEAN-07Y boot runs the stages and desktop-on.sh by itself.
   sudo bash /Volumes/PKG/metal-stack/desktop/autostart.sh on      from the next boot     (off / status likewise)
   LaunchDaemon org.local.xegfx-desktop -> /Library/XeGfx/desktop/autostart-boot.sh, log /Library/XeGfx/desktop/autostart.log
@@ -163,6 +167,37 @@ Undo:  sudo bash /Volumes/PKG/metal-stack/desktop/uninstall-desktop.sh          
        from Recovery: bash /Volumes/PKG/metal-stack/desktop/uninstall-desktop.sh "/Volumes/MAC - Data"
 Reports land in /Volumes/PKG/metal-stack/desktop/reports.
 
+WindowServer crashes 2026-11-04 10:46 and 11-05 13:11 (SIGSEGV, stack overflow in SkyLight MetalContext::RenderEncoder <-> SetScissor)
+  Chain: an imported host pointer's pages were unmapped before its first use. anv lists EVERY memory object in EVERY
+  execbuf (i915/anv_batch_chain.c, "all user allocated memory objects") and i915 wires a userptr on first use, so the
+  next execbuf of any work failed (xegfx log: "userptr hold: prepare 0xe00002de", then ioctl nr 0x69 errno 14) -> ANV:
+  VK_ERROR_DEVICE_LOST -> the plugin turns its Vulkan backend off for good -> every commandBuffer is nil -> SkyLight
+  retries forever -> stack overflow. Likely memory: WindowServer's 8-16 KB newBufferWithBytesNoCopy buffers (3 and 4
+  pages failed); who unmaps them is not known.
+  Measured with raw ioctls: unmapped or released pages give 0xe00002de; read-only pages give 0x2; EMPTIED purgeable
+  pages and surfaces wire fine, so purging was NOT the cause (a first fix that pinned purgeable memory was wrong and was removed; today's surfpin-plugin.patch is a different
+  change, see Scrolling below).
+  Once wired, pages survive the unmap.
+  Fix: xemesa/hostptr-mesa.patch (10-mesa-hostptr.sh, desktop/update-mesa.sh): wire at import (refused -> the plugin
+  copies); an object that still loses its pages gets a blank GEM object at the same address. Log: "xegfx anv: ...".
+  Test: desktop/hostptr-test.sh reproduces the device loss on the old Mesa, not on the new one.
+  Not fixed: the plugin cannot recover from a lost device, so any other cause still ends in this crash.
+
+WindowServer crash 2026-11-05 22:49 (SIGSEGV in nvmtl_buffer_sync_in, after 9 h 16 min on the Mesa fix)
+  Same root as above, seen directly: the caller unmapped the pages of a live no-copy buffer (135168 bytes, "not in any
+  region"). Read-only no-copy buffers cannot be imported, so the plugin copies them and refreshes the copy from the
+  caller's address at every submission. Also found: the copy-back after a submission wrote to those read-only pages (SIGBUS).
+  Fix: xeflip/hostsync-plugin.patch (built by 9-wsmark-plugin.sh): both copies check the pages first; a buffer whose pages
+  are gone keeps its last bytes. Log: "buffer: the caller unmapped ...". Test: desktop/hostsync-test.sh (both modes crash on
+  the old plugin, "gone" with the 22:49 stack). Why WindowServer unmaps live buffers is still not known.
+
+Render fix 2026-11-11 (jxy333967, samwu07/xegfx-thinkbook14plus-mtl issue 2): xeflip/renderfix-plugin.patch, built by
+9-wsmark-plugin.sh after wsmark and hostsync; its CDX log lines are rate-limited here. textureBarrier and render-target
+memory barriers now refresh the self-read snapshot (_snap) instead of only emitting a Vulkan barrier, and pitched
+read-only CPU views get an aligned copy. Tests: desktop/renderfix-test.sh (their six tests, in xeflip/renderfix-tests,
+BSD-2-Clause): installed plugin 512/1024 wrong on all four barrier tests, candidate 0/1024; regression 0 wrong on both.
+Loaded in WindowServer 11:01:40; with Reduce transparency off, widget corners and translucency looked right to the user.
+
 Panel brightness 2026-11-17 (the system slider changes the panel; it shows as the built-in display)
   The firmware leaves the eDP backlight on the south display PWM, controller 0 (BXT_BLC_PWM_CTL 0xc8250 enabled, FREQ
   0xc8254 = 192000, DUTY 0xc8258, at 100%); nothing in macOS drove it, and the panel was an AppleDisplay.
@@ -180,3 +215,26 @@ Panel brightness 2026-11-17 (the system slider changes the panel; it shows as th
   Every install script's kmutil create now also takes --repository /Library/Apple/System/Library/Extensions: without it
   Apple's RemoteVirtualInterface (com.apple.nke.rvi) fell out of the auxiliary collection and update-kext.sh stopped.
 
+WindowServer crash 2026-11-20 14:36 (SIGSEGV in nvmtl_buffer_sync_in again, hostsync installed): a race, not a stale
+address. The main thread freed an 18.7 MB CA::Render::Shmem (mach_vm_deallocate) while nvmtl.execution was copying from
+it: the pages passed hostsync's check and vanished mid-copy. Fix: xeflip/hostalias-plugin.patch (9-wsmark-plugin.sh,
+after the touchpad session's patches): the first copy maps the caller's pages a second time into the plugin's own range
+(mach_vm_remap, shared, no copy) and every copy goes through that mapping, which keeps the pages alive; freed with the
+buffer. Test: desktop/hostsync-test.sh gained "race" (300 rounds of freeing during the copy): all three modes pass.
+
+Scrolling 2026-11-15 (browser scrolling ~37 frames/s while dragging reaches ~58-60): measured with
+xeflip/framelog-plugin.patch (one WSFRAME line per composite while /Library/GPUBundles/framelog-on exists). Causes: frames
+that import a surface again (the plugin's surface cache is weak) and the render-target snapshot copies at texture barriers.
+  xeflip/surfpin-plugin.patch: the most recent surface backings are also held strongly (LRU, 48 entries / 384 MB; off:
+  /Library/GPUBundles/nosurfpin). Imports went from 24 % to 3 % of composites, scrolling ~37 -> ~40-45 frames/s (noisy).
+  xeflip/barrier-region-plugin.patch: a barrier copies only what the pass drew since the last copy (off:
+  /Library/GPUBundles/nobarrierregion). Little gain: WindowServer's draws cover most of the target.
+All four plugin patches after renderfix are applied by 9-wsmark-plugin.sh, in the order framelog, barrier-region, surfpin,
+hostalias.
+
+XeGfx 0.0.48 (2026-11-22): this machine runs the upstream release zip (SHA-256 55735d7e...), whose stage 4 moves the boot
+framebuffer out of the GuC area itself (WTLIntelGfx PR #16): "xegfx-fbmove" = status 1, 0xfe800000 -> 0x80000000.
+XgFbMove.kext is parked (not in /Library/Extensions) and /Library/XeGfx/stage4-move-in-kext exists, so
+run-xegfx-stages.sh neither loads XgFbMove nor stops before stage 4. common.sh pins v0.0.48 (972d75a3); kexts/, plugin/,
+translator/ and userland/ are the same as in v0.0.47, so every patch here applies unchanged: XeGfxAccel, XeGfxIntelFB and
+the plugin rebuilt on v0.0.48 are byte-identical to the installed ones (code signature aside).
