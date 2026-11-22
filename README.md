@@ -63,10 +63,11 @@ No ECEnabler or ACPI patch is needed: every field the DSDT's `BAT1` and `ACAD` r
 and undo too; after a Windows EFI deploy, apply again). "Not charging" at 80% on AC is Lenovo's battery conservation
 limit, set from Windows or the BIOS.
 
-It also made the CPU much faster. Without a battery, macOS limits the power of a MacBook (this EFI reports a
-MacBookPro16,2). Single-thread multiply test (`cpuname/tools/ghz.c`, built with `clang -O2 -o ghz ghz.c`, 8 runs): median ~1.65 GHz before (range 1.06-3.56),
-~3.25 GHz after (2.61-3.76). Edge then scrolled at 60 frames/s, where earlier scrolling benches gave 33-45. How macOS
-applies the limit was not traced, and the run before was on an earlier boot.
+It did not make the CPU faster, although a first test suggested it. Geekbench 7.1.0 (CPU) without and with
+SMCBatteryManager: single-core 1354 / 1350, multi-core 9507 / 10055 (about 6 %, near run-to-run noise). A one-thread
+multiply test (`cpuname/tools/ghz.c`, `clang -O2 -o ghz ghz.c`) had given a median of ~1.65 GHz before and ~3.25 GHz
+after, but it does not pin its thread, and macOS sees all 22 threads as one kind of core, so it measures where the
+thread landed (P-core or E-core) more than any power limit.
 
 Sleep stays off (`pmset` `sleep 0`). The firmware offers no S3: the DSDT has `SS3 = Zero`, so the machine only does
 Modern Standby (S0ix), which macOS does not use on these machines. XeGfx also has no suspend and resume: the GPU would come

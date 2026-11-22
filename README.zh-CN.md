@@ -59,9 +59,10 @@ macOS 原来完全识别不到电池（`pmset` 只列出“AC Power”）。只�
 和 undo；从 Windows 部署 EFI 后需要再运行一次）。插着电源停在 80%、显示“not charging”，是联想的电池养护上限，
 在 Windows 或 BIOS 里设置。
 
-它还让 CPU 快了很多。没有电池时，macOS 会限制 MacBook 的功耗（这个 EFI 报告的机型是 MacBookPro16,2）。单线程乘法测试
-（`cpuname/tools/ghz.c`，用 `clang -O2 -o ghz ghz.c` 编译，8 次）：之前中位数约 1.65 GHz（范围 1.06-3.56），之后约 3.25 GHz（2.61-3.76）。随后 Edge 滚动
-达到 60 帧/秒，而之前的滚动测试只有 33-45 帧。macOS 具体怎样施加这个限制没有追查，而且之前那次测试是在更早的一次开机里。
+它并没有让 CPU 变快，尽管第一次测试看起来像是变快了。Geekbench 7.1.0（CPU）在没有和有 SMCBatteryManager 时：
+单核 1354 / 1350，多核 9507 / 10055（约 6%，接近正常波动）。单线程乘法测试（`cpuname/tools/ghz.c`，用
+`clang -O2 -o ghz ghz.c` 编译）之前中位数约 1.65 GHz、之后约 3.25 GHz，但它不绑定核心，而 macOS 把 22 个线程都当成
+同一种核，所以它测到的主要是线程落在了性能核还是能效核上，而不是功耗限制。
 
 睡眠仍然关闭（`pmset` 中 `sleep 0`）。固件不提供 S3：DSDT 里 `SS3 = Zero`，这台机器只支持现代待机（S0ix），
 而 macOS 在这类机器上不使用它。XeGfx 也没有挂起和恢复：GPU 醒来时会丢失 GuC、GGTT 和显示状态。休眠（S4 存在）
